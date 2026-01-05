@@ -1,0 +1,23 @@
+# Simple test without dependencies
+# All tasks run independently, ordered by priority
+
+tasks:
+  - prompt: "What is the capital of France?"
+    session: "test-geo-1"
+    priority: 10
+    max_attempts: 3
+
+  - prompt: "What is 10 + 20?"
+    session: "test-math-1"
+    priority: 8
+    max_attempts: 3
+
+  - prompt: "Name a programming language"
+    session: "test-tech-1"
+    priority: 5
+    max_attempts: 3
+
+# Expected execution order (by priority):
+# 1. test-geo-1 (priority 10)
+# 2. test-math-1 (priority 8)
+# 3. test-tech-1 (priority 5)

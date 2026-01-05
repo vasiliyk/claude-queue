@@ -1,0 +1,20 @@
+# Test circular dependency detection
+# This should FAIL with "Circular dependency detected" error
+
+tasks:
+  - prompt: "Task A"
+    session: "task-a"
+    priority: 10
+    depends_on: ["task-b"]  # A depends on B
+
+  - prompt: "Task B"
+    session: "task-b"
+    priority: 10
+    depends_on: ["task-c"]  # B depends on C
+
+  - prompt: "Task C"
+    session: "task-c"
+    priority: 10
+    depends_on: ["task-a"]  # C depends on A -> CIRCULAR!
+
+# Expected result: Should fail with ValidationError: "Circular dependency detected"

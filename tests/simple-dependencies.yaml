@@ -1,0 +1,44 @@
+# Simple dependency test - safe tasks with no side effects
+# These tasks just ask simple questions to test the dependency system
+
+tasks:
+  # Foundation task - no dependencies
+  - prompt: "What is 2 + 2? Just respond with the number."
+    session: "test-math-basic"
+    priority: 10
+    max_attempts: 3
+
+  # Two tasks that depend on the math task
+  - prompt: "What is 5 + 5? Just respond with the number."
+    session: "test-math-add"
+    priority: 8
+    max_attempts: 3
+    depends_on: ["test-math-basic"]
+
+  - prompt: "What is 3 * 3? Just respond with the number."
+    session: "test-math-multiply"
+    priority: 8
+    max_attempts: 3
+    depends_on: ["test-math-basic"]
+
+  # Task that waits for both previous tasks
+  - prompt: "List three colors. Just respond with the colors separated by commas."
+    session: "test-colors"
+    priority: 5
+    max_attempts: 3
+    depends_on:
+      - "test-math-add"
+      - "test-math-multiply"
+
+  # Final task that waits for colors
+  - prompt: "Say 'All tests completed successfully'"
+    session: "test-final"
+    priority: 3
+    max_attempts: 3
+    depends_on: ["test-colors"]
+
+# Expected execution order:
+# 1. test-math-basic (priority 10, no deps)
+# 2. test-math-add and test-math-multiply (priority 8, depend on #1)
+# 3. test-colors (priority 5, depends on #2)
+# 4. test-final (priority 3, depends on #3)
