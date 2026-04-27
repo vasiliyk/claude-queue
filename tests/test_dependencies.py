@@ -1,20 +1,6 @@
 """Unit tests for dependency validation and circular dependency detection"""
-import importlib.util
-import sys
-from pathlib import Path
 
 import pytest
-
-# Import claude-queue.py as a module
-spec = importlib.util.spec_from_file_location(
-    "claude_queue",
-    Path(__file__).parent.parent / "claude-queue.py"
-)
-claude_queue = importlib.util.module_from_spec(spec)
-sys.modules["claude_queue"] = claude_queue
-spec.loader.exec_module(claude_queue)
-
-# Import needed classes and functions
 from claude_queue import (
     TaskQueue,
     TaskStatus,
@@ -37,16 +23,21 @@ class TestCircularDependencyDetection:
     These tests verify the detection algorithm directly.
     """
 
-    def test_circular_dependency_in_new_task(self, temp_queue):
-        """Test that circular dependencies are detected when adding new tasks"""
-        # Create chain: A -> B -> C
+    def test_incremental_cycles_prevented_by_existence_check(self, temp_queue):
+        """Incremental cycle creation is prevented by the dependency-existence check.
+
+        _check_circular_dependencies is only reachable for new (not-yet-queued) tasks.
+        Since no existing task can reference a task that doesn't exist yet, a new task
+        can never close a cycle incrementally. Cycles in batch files are caught by the
+        multi-pass loader's 'no progress' detection instead.
+        """
         task_a = temp_queue.add_task("Task A", session_name="task-a")
         task_b = temp_queue.add_task("Task B", session_name="task-b", depends_on=[task_a.id])
         _task_c = temp_queue.add_task("Task C", session_name="task-c", depends_on=[task_b.id])
 
-        # Try to add task_d that would create cycle: D -> A (completing A -> B -> C -> D -> A)
-        # This is tested in batch loading (see test_batch.py::test_circular_dependency_detection)
-        # Chain created successfully - circular detection happens during batch loading
+        # Trying to reference a non-existent ID is blocked before DFS runs
+        with pytest.raises(ValidationError, match="does not exist"):
+            temp_queue.add_task("Task D", depends_on=["nonexistent-id"])
 
     def test_self_dependency_rejected(self, temp_queue):
         """Test that self-dependency is rejected"""
@@ -71,7 +62,9 @@ class TestCircularDependencyDetection:
         task_c = temp_queue.add_task("Task C", session_name="task-c", depends_on=[task_a.id])
 
         # Creating task_d that depends on both task_b and task_c should work
-        task_d = temp_queue.add_task("Task D", session_name="task-d", depends_on=[task_b.id, task_c.id])
+        task_d = temp_queue.add_task(
+            "Task D", session_name="task-d", depends_on=[task_b.id, task_c.id]
+        )
 
         assert task_d.depends_on == [task_b.id, task_c.id]
 
@@ -104,7 +97,9 @@ class TestDependencyValidation:
         """Test task with multiple dependencies"""
         task_a = temp_queue.add_task("Task A", session_name="task-a")
         task_b = temp_queue.add_task("Task B", session_name="task-b")
-        task_c = temp_queue.add_task("Task C", session_name="task-c", depends_on=[task_a.id, task_b.id])
+        task_c = temp_queue.add_task(
+            "Task C", session_name="task-c", depends_on=[task_a.id, task_b.id]
+        )
 
         assert len(task_c.depends_on) == 2
         assert task_a.id in task_c.depends_on
@@ -175,7 +170,9 @@ class TestDependencySatisfaction:
         """Test that all dependencies must be completed"""
         task_a = temp_queue.add_task("Task A", session_name="task-a")
         task_b = temp_queue.add_task("Task B", session_name="task-b")
-        task_c = temp_queue.add_task("Task C", session_name="task-c", depends_on=[task_a.id, task_b.id])
+        task_c = temp_queue.add_task(
+            "Task C", session_name="task-c", depends_on=[task_a.id, task_b.id]
+        )
 
         # Complete only task_a
         temp_queue.update_task(task_a.id, status=TaskStatus.COMPLETED.value)
@@ -216,7 +213,9 @@ class TestGetNextTaskWithDependencies:
     def test_get_next_respects_dependencies(self, temp_queue):
         """Test that get_next_task respects dependencies"""
         task_a = temp_queue.add_task("Task A", session_name="task-a", priority=5)
-        _task_b = temp_queue.add_task("Task B", session_name="task-b", priority=10, depends_on=[task_a.id])
+        _task_b = temp_queue.add_task(
+            "Task B", session_name="task-b", priority=10, depends_on=[task_a.id]
+        )
 
         # Even though task_b has higher priority, task_a should come first
         next_task = temp_queue.get_next_task()
@@ -225,7 +224,9 @@ class TestGetNextTaskWithDependencies:
     def test_get_next_after_dependency_completed(self, temp_queue):
         """Test that dependent task becomes available after dependency completes"""
         task_a = temp_queue.add_task("Task A", session_name="task-a", priority=5)
-        task_b = temp_queue.add_task("Task B", session_name="task-b", priority=10, depends_on=[task_a.id])
+        task_b = temp_queue.add_task(
+            "Task B", session_name="task-b", priority=10, depends_on=[task_a.id]
+        )
 
         # Complete task_a
         temp_queue.update_task(task_a.id, status=TaskStatus.COMPLETED.value)

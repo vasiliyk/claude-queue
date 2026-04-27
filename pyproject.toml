@@ -24,30 +24,29 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyyaml>=6.0.1",
-    "requests>=2.31.0",
+    "pyyaml>=6.0.3",
+    "requests>=2.33.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "pytest-mock>=3.11.1",
-    "ruff>=0.1.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.12",
+    "mypy>=1.20.2",
+    "types-requests>=2.33.0",
+    "types-PyYAML>=6.0.0",
+    "pre-commit>=4.6.0",
 ]
 
-[project.scripts]
-claude-queue = "claude_queue.cli:main"
-
-[tool.setuptools]
-packages = ["claude_queue"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=claude_queue --cov-report=term-missing"
+addopts = "-v --cov-report=term-missing"
 
 [tool.ruff]
 line-length = 100
@@ -66,6 +65,11 @@ select = [
 ignore = [
     "E501",  # line too long (handled by formatter)
 ]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+ignore_missing_imports = false
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = [

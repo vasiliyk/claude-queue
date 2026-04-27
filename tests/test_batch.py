@@ -1,20 +1,6 @@
 """Unit tests for batch loading functionality"""
-import importlib.util
-import sys
-from pathlib import Path
 
 import pytest
-
-# Import claude-queue.py as a module
-spec = importlib.util.spec_from_file_location(
-    "claude_queue",
-    Path(__file__).parent.parent / "claude-queue.py"
-)
-claude_queue = importlib.util.module_from_spec(spec)
-sys.modules["claude_queue"] = claude_queue
-spec.loader.exec_module(claude_queue)
-
-# Import needed classes and functions
 from claude_queue import (
     QueueFileError,
     TaskQueue,
@@ -102,9 +88,9 @@ class TestBatchLoading:
         tasks = load_batch_file(simple_yaml_file)
 
         assert len(tasks) == 2
-        assert tasks[0]['prompt'] == "Task 1"
-        assert tasks[0]['session'] == "task1"
-        assert tasks[0]['priority'] == 10
+        assert tasks[0]["prompt"] == "Task 1"
+        assert tasks[0]["session"] == "task1"
+        assert tasks[0]["priority"] == 10
 
     def test_load_nonexistent_file(self, tmp_path):
         """Test loading non-existent file raises error"""
@@ -133,7 +119,7 @@ class TestBatchLoading:
 
         tasks = load_batch_file(json_file)
         assert len(tasks) == 1
-        assert tasks[0]['prompt'] == "Task 1"
+        assert tasks[0]["prompt"] == "Task 1"
 
     def test_unsupported_file_format(self, tmp_path):
         """Test that unsupported file formats are rejected"""
@@ -167,9 +153,9 @@ class TestSessionNameResolution:
         assert len(tasks) == 3
 
         # Verify dependency structure in file
-        assert 'depends_on' not in tasks[0]
-        assert tasks[1]['depends_on'] == ["foundation"]
-        assert tasks[2]['depends_on'] == ["dependent"]
+        assert "depends_on" not in tasks[0]
+        assert tasks[1]["depends_on"] == ["foundation"]
+        assert tasks[2]["depends_on"] == ["dependent"]
 
 
 class TestCircularDependencies:
@@ -180,12 +166,12 @@ class TestCircularDependencies:
         tasks = load_batch_file(circular_yaml_file)
 
         # All tasks have dependencies
-        assert all('depends_on' in task for task in tasks)
+        assert all("depends_on" in task for task in tasks)
 
         # This creates a circle: task-a -> task-b -> task-c -> task-a
-        assert tasks[0]['depends_on'] == ["task-b"]
-        assert tasks[1]['depends_on'] == ["task-c"]
-        assert tasks[2]['depends_on'] == ["task-a"]
+        assert tasks[0]["depends_on"] == ["task-b"]
+        assert tasks[1]["depends_on"] == ["task-c"]
+        assert tasks[2]["depends_on"] == ["task-a"]
 
 
 class TestBatchValidation:
@@ -236,8 +222,8 @@ tasks:
         tasks = load_batch_file(yaml_file)
 
         # File doesn't specify these, they should get defaults when added
-        assert 'priority' not in tasks[0]
-        assert 'max_attempts' not in tasks[0]
+        assert "priority" not in tasks[0]
+        assert "max_attempts" not in tasks[0]
 
     def test_custom_max_attempts(self, tmp_path):
         """Test custom max_attempts value"""
@@ -250,7 +236,7 @@ tasks:
         yaml_file.write_text(yaml_content)
 
         tasks = load_batch_file(yaml_file)
-        assert tasks[0]['max_attempts'] == 5
+        assert tasks[0]["max_attempts"] == 5
 
     def test_working_dir_in_yaml(self, tmp_path):
         """Test loading tasks with working_dir"""
@@ -277,5 +263,5 @@ tasks:
         tasks = load_batch_file(yaml_file)
 
         assert len(tasks) == 2
-        assert tasks[0]['working_dir'] == str(project_a)
-        assert tasks[1]['working_dir'] == str(project_b)
+        assert tasks[0]["working_dir"] == str(project_a)
+        assert tasks[1]["working_dir"] == str(project_b)

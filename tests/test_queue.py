@@ -1,20 +1,6 @@
 """Unit tests for TaskQueue functionality"""
-import importlib.util
-import sys
-from pathlib import Path
 
 import pytest
-
-# Import claude-queue.py as a module
-spec = importlib.util.spec_from_file_location(
-    "claude_queue",
-    Path(__file__).parent.parent / "claude-queue.py"
-)
-claude_queue = importlib.util.module_from_spec(spec)
-sys.modules["claude_queue"] = claude_queue
-spec.loader.exec_module(claude_queue)
-
-# Import needed classes and functions
 from claude_queue import (
     QueueFileError,
     TaskQueue,
@@ -330,7 +316,7 @@ class TestFileOperations:
             queue._load_tasks()
 
         # Backup should exist
-        backup_file = queue_file.with_suffix('.json.backup')
+        backup_file = queue_file.with_suffix(".json.backup")
         assert backup_file.exists()
 
 
@@ -347,7 +333,7 @@ class TestStatistics:
 
         stats = temp_queue.get_stats()
 
-        assert stats['total'] == 3
-        assert stats['queued'] == 2
-        assert stats['completed'] == 1
-        assert stats['failed'] == 0
+        assert stats["total"] == 3
+        assert stats["queued"] == 2
+        assert stats["completed"] == 1
+        assert stats["failed"] == 0

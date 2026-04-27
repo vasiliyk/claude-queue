@@ -1,22 +1,10 @@
 """Unit tests for ClaudeWorker functionality"""
-import importlib.util
+
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-
-# Import claude-queue.py as a module
-spec = importlib.util.spec_from_file_location(
-    "claude_queue",
-    Path(__file__).parent.parent / "claude-queue.py"
-)
-claude_queue = importlib.util.module_from_spec(spec)
-sys.modules["claude_queue"] = claude_queue
-spec.loader.exec_module(claude_queue)
-
-# Import needed classes and functions
 from claude_queue import (
     ClaudeWorker,
     TaskQueue,
@@ -53,11 +41,7 @@ class TestWorkerInitialization:
 
     def test_init_with_output_saving(self, temp_queue, temp_output_dir):
         """Test worker initialization with output saving enabled"""
-        worker = ClaudeWorker(
-            temp_queue,
-            save_output=True,
-            output_dir=temp_output_dir
-        )
+        worker = ClaudeWorker(temp_queue, save_output=True, output_dir=temp_output_dir)
 
         assert worker.save_output is True
         assert worker.output_dir == temp_output_dir
@@ -80,8 +64,8 @@ class TestRateLimitParsing:
         stderr = "Error: Rate limit exceeded. Please retry after 300 seconds."
         info = worker.parse_rate_limit_info(stderr)
 
-        assert info['retry_after'] == 300
-        assert info['error_message'] == stderr
+        assert info["retry_after"] == 300
+        assert info["error_message"] == stderr
 
     def test_parse_wait_seconds(self, temp_queue):
         """Test parsing 'wait X seconds' format"""
@@ -90,7 +74,7 @@ class TestRateLimitParsing:
         stderr = "Rate limit hit. Please wait 120 seconds before retrying."
         info = worker.parse_rate_limit_info(stderr)
 
-        assert info['retry_after'] == 120
+        assert info["retry_after"] == 120
 
     def test_parse_retry_after_header(self, temp_queue):
         """Test parsing 'retry-after: X' format"""
@@ -99,7 +83,7 @@ class TestRateLimitParsing:
         stderr = "HTTP 429: Too Many Requests\nretry-after: 180"
         info = worker.parse_rate_limit_info(stderr)
 
-        assert info['retry_after'] == 180
+        assert info["retry_after"] == 180
 
     def test_parse_no_retry_info(self, temp_queue):
         """Test parsing error with no retry information"""
@@ -108,15 +92,15 @@ class TestRateLimitParsing:
         stderr = "Some other error occurred"
         info = worker.parse_rate_limit_info(stderr)
 
-        assert info['retry_after'] is None
-        assert info['error_message'] == stderr
+        assert info["retry_after"] is None
+        assert info["error_message"] == stderr
 
     def test_calculate_wait_time_with_retry_after(self, temp_queue):
         """Test wait time calculation with retry-after"""
         worker = ClaudeWorker(temp_queue)
         task = temp_queue.add_task("Test task")
 
-        rate_limit_info = {'retry_after': 300, 'error_message': 'Rate limited'}
+        rate_limit_info = {"retry_after": 300, "error_message": "Rate limited"}
         wait_time = worker.calculate_wait_time(rate_limit_info, task)
 
         assert wait_time == 300
@@ -126,7 +110,7 @@ class TestRateLimitParsing:
         worker = ClaudeWorker(temp_queue)
         task = temp_queue.add_task("Test task")
 
-        rate_limit_info = {'retry_after': None, 'error_message': 'Unknown error'}
+        rate_limit_info = {"retry_after": None, "error_message": "Unknown error"}
         wait_time = worker.calculate_wait_time(rate_limit_info, task)
 
         assert wait_time is None
@@ -146,7 +130,7 @@ class TestTaskExecution:
         mock_result.stdout = "Task completed successfully"
         mock_result.stderr = ""
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             success = worker.execute_task(task)
 
         assert success is True
@@ -162,22 +146,19 @@ class TestTaskExecution:
         working_dir.mkdir()
 
         worker = ClaudeWorker(temp_queue)
-        task = temp_queue.add_task(
-            "Test prompt",
-            working_dir=str(working_dir)
-        )
+        task = temp_queue.add_task("Test prompt", working_dir=str(working_dir))
 
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = "Success"
         mock_result.stderr = ""
 
-        with patch('subprocess.run', return_value=mock_result) as mock_run:
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
             worker.execute_task(task)
 
         # Verify subprocess.run was called with correct cwd
         call_kwargs = mock_run.call_args[1]
-        assert call_kwargs['cwd'] == working_dir
+        assert call_kwargs["cwd"] == working_dir
 
     def test_execute_task_rate_limited(self, temp_queue):
         """Test task execution with rate limit error"""
@@ -190,7 +171,7 @@ class TestTaskExecution:
         mock_result.stdout = ""
         mock_result.stderr = "Error: Rate limit exceeded. Retry after 60 seconds."
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             success = worker.execute_task(task)
 
         assert success is False
@@ -211,7 +192,7 @@ class TestTaskExecution:
         mock_result.stdout = ""
         mock_result.stderr = "Some other error occurred"
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             success = worker.execute_task(task)
 
         assert success is False
@@ -236,7 +217,7 @@ class TestTaskExecution:
         mock_result.stdout = ""
         mock_result.stderr = "Error occurred"
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             success = worker.execute_task(task)
 
         assert success is False
@@ -252,7 +233,7 @@ class TestTaskExecution:
         task = temp_queue.add_task("Test prompt")
 
         # Mock timeout
-        with patch('subprocess.run', side_effect=subprocess.TimeoutExpired('claude', 3600)):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 3600)):
             success = worker.execute_task(task)
 
         assert success is False
@@ -276,7 +257,7 @@ class TestOutputSaving:
         mock_result.stdout = "Task output"
         mock_result.stderr = ""
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             worker.execute_task(task)
 
         # Verify no output file created
@@ -285,11 +266,7 @@ class TestOutputSaving:
 
     def test_save_output_enabled(self, temp_queue, temp_output_dir):
         """Test that output is saved when enabled"""
-        worker = ClaudeWorker(
-            temp_queue,
-            save_output=True,
-            output_dir=temp_output_dir
-        )
+        worker = ClaudeWorker(temp_queue, save_output=True, output_dir=temp_output_dir)
         task = temp_queue.add_task("Test prompt", session_name="test-session")
 
         mock_result = Mock()
@@ -297,7 +274,7 @@ class TestOutputSaving:
         mock_result.stdout = "Task output content"
         mock_result.stderr = ""
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             worker.execute_task(task)
 
         # Verify output file created
@@ -313,11 +290,7 @@ class TestOutputSaving:
 
     def test_save_output_only_on_success(self, temp_queue, temp_output_dir):
         """Test that output is only saved for successful tasks"""
-        worker = ClaudeWorker(
-            temp_queue,
-            save_output=True,
-            output_dir=temp_output_dir
-        )
+        worker = ClaudeWorker(temp_queue, save_output=True, output_dir=temp_output_dir)
         task = temp_queue.add_task("Test prompt")
 
         # Mock failure
@@ -326,7 +299,7 @@ class TestOutputSaving:
         mock_result.stdout = "Some output"
         mock_result.stderr = "Error occurred"
 
-        with patch('subprocess.run', return_value=mock_result):
+        with patch("subprocess.run", return_value=mock_result):
             worker.execute_task(task)
 
         # Verify no output file created for failed task
@@ -335,11 +308,7 @@ class TestOutputSaving:
 
     def test_save_output_failure_handled_gracefully(self, temp_queue, temp_output_dir):
         """Test that output save failures don't break task completion"""
-        worker = ClaudeWorker(
-            temp_queue,
-            save_output=True,
-            output_dir=temp_output_dir
-        )
+        worker = ClaudeWorker(temp_queue, save_output=True, output_dir=temp_output_dir)
         task = temp_queue.add_task("Test prompt")
 
         mock_result = Mock()
@@ -349,17 +318,173 @@ class TestOutputSaving:
 
         # Mock file write failure - need to be more specific to only affect output file
         original_open = open
+
         def selective_open(file, *args, **kwargs):
             # Only fail for output files, let queue file operations succeed
             if temp_output_dir in Path(file).parents or Path(file).parent == temp_output_dir:
                 raise OSError("Disk full")
             return original_open(file, *args, **kwargs)
 
-        with patch('subprocess.run', return_value=mock_result):
-            with patch('builtins.open', side_effect=selective_open):
+        with patch("subprocess.run", return_value=mock_result):
+            with patch("builtins.open", side_effect=selective_open):
                 success = worker.execute_task(task)
 
         # Task should still be marked as completed despite output save failure
         assert success is True
         updated_task = temp_queue.get_all_tasks()[0]
         assert updated_task.status == TaskStatus.COMPLETED.value
+
+
+class TestWorkerRun:
+    """Test worker.run() main event loop"""
+
+    def test_run_exits_on_empty_queue(self, temp_queue):
+        """Worker exits cleanly when queue is empty"""
+        worker = ClaudeWorker(temp_queue)
+        worker.run()  # Should return without error
+
+    def test_run_resets_interrupted_running_tasks(self, temp_queue):
+        """On startup, tasks stuck in RUNNING are reset to QUEUED"""
+        task = temp_queue.add_task("Test task")
+        temp_queue.update_task(task.id, status=TaskStatus.RUNNING.value)
+
+        worker = ClaudeWorker(temp_queue)
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+        with patch("subprocess.run", return_value=mock_result):
+            with patch("time.sleep"):
+                worker.run()
+
+        updated = temp_queue.get_all_tasks()[0]
+        assert updated.status == TaskStatus.COMPLETED.value  # Was reset to QUEUED, then executed
+
+    def test_run_exponential_backoff_on_failure(self, temp_queue):
+        """Failed tasks trigger exponential backoff delay"""
+        temp_queue.add_task("Test task", max_attempts=2)
+
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "Some error"
+
+        sleep_calls = []
+        worker = ClaudeWorker(temp_queue, base_retry_delay=60)
+        with patch("subprocess.run", return_value=mock_result):
+            with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+                worker.run()
+
+        # Should have slept with exponential backoff (60 * 2^0 = 60 for first failure)
+        assert any(s == 60 for s in sleep_calls)
+
+    def test_run_rate_limited_task_waits_retry_after(self, temp_queue):
+        """Rate-limited task waits the retry-after duration before continuing"""
+        temp_queue.add_task("Test task", max_attempts=2)
+
+        # First call returns rate limit error with retry-after
+        rate_limit_result = Mock()
+        rate_limit_result.returncode = 1
+        rate_limit_result.stdout = ""
+        rate_limit_result.stderr = "Rate limit exceeded. Retry after 120 seconds."
+
+        # Second call succeeds
+        success_result = Mock()
+        success_result.returncode = 0
+        success_result.stdout = "Done"
+        success_result.stderr = ""
+
+        sleep_calls = []
+        worker = ClaudeWorker(temp_queue)
+        with patch("subprocess.run", side_effect=[rate_limit_result, success_result]):
+            with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+                worker.run()
+
+        assert 120 in sleep_calls
+        updated = temp_queue.get_all_tasks()[0]
+        assert updated.status == TaskStatus.COMPLETED.value
+
+
+class TestCheckAndWaitForLimits:
+    """Test check_and_wait_for_limits sleep behavior"""
+
+    def _make_checker(
+        self, utilization_5h=50.0, utilization_7d=50.0, resets_at="2099-01-01T12:00:00.000000Z"
+    ):
+        """Build a mocked ClaudeUsageChecker"""
+        checker = Mock()
+        parsed = {
+            "five_hour": {
+                "utilization": utilization_5h,
+                "utilization_percent": f"{utilization_5h:.1f}%",
+                "resets_at": resets_at,
+                "resets_at_local": "2099-01-01 12:00:00 UTC",
+                "time_until_reset": "1h 0m",
+            },
+            "seven_day": {
+                "utilization": utilization_7d,
+                "utilization_percent": f"{utilization_7d:.1f}%",
+                "resets_at": resets_at,
+                "resets_at_local": "2099-01-01 12:00:00 UTC",
+                "time_until_reset": "1h 0m",
+            },
+        }
+        checker.is_limit_exceeded.return_value = (False, None, None)
+        return checker, parsed
+
+    def test_no_sleep_when_limit_ok(self, temp_queue):
+        """Worker does not sleep when usage is below threshold"""
+        checker, _ = self._make_checker(utilization_5h=50.0)
+        worker = ClaudeWorker(temp_queue, usage_checker=checker)
+
+        with patch("time.sleep") as mock_sleep:
+            worker.check_and_wait_for_limits()
+
+        mock_sleep.assert_not_called()
+
+    def test_sleeps_until_reset_when_limit_exceeded(self, temp_queue):
+        """Worker sleeps until reset time when limit is exceeded"""
+        from datetime import datetime, timedelta, timezone
+
+        future_reset = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000000Z"
+        )
+        checker, parsed = self._make_checker(utilization_5h=96.0, resets_at=future_reset)
+        checker.is_limit_exceeded.return_value = (True, "5-hour limit at 96.0%", parsed)
+
+        worker = ClaudeWorker(temp_queue, usage_checker=checker)
+        sleep_calls = []
+        with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+            worker.check_and_wait_for_limits()
+
+        assert len(sleep_calls) == 1
+        # Should sleep roughly 3600 seconds (+10 buffer), within a reasonable range
+        assert 3500 < sleep_calls[0] < 3700
+
+    def test_fallback_sleep_when_no_reset_time(self, temp_queue):
+        """Worker sleeps 300s fallback when reset time is unavailable"""
+        checker, parsed = self._make_checker(utilization_5h=96.0)
+        parsed["five_hour"]["resets_at"] = None
+        # First call: limit exceeded; second call: limits OK so loop exits
+        checker.is_limit_exceeded.side_effect = [
+            (True, "5-hour limit at 96.0%", parsed),
+            (False, None, None),
+        ]
+
+        worker = ClaudeWorker(temp_queue, usage_checker=checker)
+        sleep_calls = []
+        with patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+            worker.check_and_wait_for_limits()
+
+        assert 300 in sleep_calls
+
+    def test_returns_without_blocking_on_fetch_error(self, temp_queue):
+        """Worker does not block if limit check raises an exception"""
+        checker = Mock()
+        checker.is_limit_exceeded.side_effect = Exception("Network error")
+
+        worker = ClaudeWorker(temp_queue, usage_checker=checker)
+        with patch("time.sleep") as mock_sleep:
+            worker.check_and_wait_for_limits()  # Should return, not raise
+
+        mock_sleep.assert_not_called()

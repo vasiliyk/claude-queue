@@ -36,6 +36,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
@@ -46,6 +48,7 @@ import requests
 # Optional YAML support for batch loading
 try:
     import yaml
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -54,27 +57,28 @@ except ImportError:
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
 )
-logger = logging.getLogger('claude-queue')
+logger = logging.getLogger("claude-queue")
 
 
 # Custom exceptions
 class QueueError(Exception):
     """Base exception for queue operations"""
+
     pass
 
 
 class ValidationError(QueueError):
     """Raised when input validation fails"""
+
     pass
 
 
 class QueueFileError(QueueError):
     """Raised when queue file operations fail"""
+
     pass
 
 
@@ -89,7 +93,9 @@ class TaskStatus(Enum):
 class ClaudeUsageChecker:
     """Checks Claude usage limits via the claude.ai API"""
 
-    def __init__(self, session_key: str | None = None, api_url: str | None = None, org_id: str | None = None):
+    def __init__(
+        self, session_key: str | None = None, api_url: str | None = None, org_id: str | None = None
+    ):
         """
         Initialize the usage checker.
 
@@ -98,7 +104,7 @@ class ClaudeUsageChecker:
             api_url: Override full API URL if needed
             org_id: Organization ID. If not provided, will be auto-detected from CLAUDE_ORG_ID env var or API.
         """
-        self.session_key = session_key or os.getenv('CLAUDE_SESSION_KEY')
+        self.session_key = session_key or os.getenv("CLAUDE_SESSION_KEY")
 
         if not self.session_key:
             raise ValueError(
@@ -110,21 +116,23 @@ class ClaudeUsageChecker:
             )
 
         self.session = requests.Session()
-        self.session.cookies.set('sessionKey', self.session_key)
+        self.session.cookies.set("sessionKey", self.session_key)
 
         # Add common headers to look like a browser
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://claude.ai/',
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Referer": "https://claude.ai/",
+            }
+        )
 
         # Determine the API URL
         if api_url:
             self.usage_api_url = api_url
         else:
             # Get org ID from parameter, env var, or auto-detect
-            self.org_id = org_id or os.getenv('CLAUDE_ORG_ID')
+            self.org_id = org_id or os.getenv("CLAUDE_ORG_ID")
             if not self.org_id:
                 logger.info("Auto-detecting organization ID...")
                 self.org_id = self._get_organization_id()
@@ -144,14 +152,14 @@ class ClaudeUsageChecker:
         """
         try:
             # Try to get account info which should contain organization details
-            response = self.session.get('https://claude.ai/api/organizations', timeout=10)
+            response = self.session.get("https://claude.ai/api/organizations", timeout=10)
             response.raise_for_status()
 
             orgs = response.json()
 
             # Get the first/default organization
             if isinstance(orgs, list) and len(orgs) > 0:
-                org_id = orgs[0].get('uuid') or orgs[0].get('id')
+                org_id = orgs[0].get("uuid") or orgs[0].get("id")
                 if org_id:
                     logger.info(f"Detected organization ID: {org_id}")
                     return org_id
@@ -200,29 +208,29 @@ class ClaudeUsageChecker:
         result = {}
 
         # Parse 5-hour limit
-        if 'five_hour' in data and data['five_hour']:
-            five_hour = data['five_hour']
-            result['five_hour'] = {
-                'utilization': five_hour.get('utilization', 0),
-                'utilization_percent': f"{five_hour.get('utilization', 0):.1f}%",
-                'resets_at': five_hour.get('resets_at'),
-                'resets_at_local': self._parse_timestamp(five_hour.get('resets_at')),
-                'time_until_reset': self._time_until(five_hour.get('resets_at')),
+        if "five_hour" in data and data["five_hour"]:
+            five_hour = data["five_hour"]
+            result["five_hour"] = {
+                "utilization": five_hour.get("utilization", 0),
+                "utilization_percent": f"{five_hour.get('utilization', 0):.1f}%",
+                "resets_at": five_hour.get("resets_at"),
+                "resets_at_local": self._parse_timestamp(five_hour.get("resets_at")),
+                "time_until_reset": self._time_until(five_hour.get("resets_at")),
             }
 
         # Parse 7-day limit
-        if 'seven_day' in data and data['seven_day']:
-            seven_day = data['seven_day']
-            result['seven_day'] = {
-                'utilization': seven_day.get('utilization', 0),
-                'utilization_percent': f"{seven_day.get('utilization', 0):.1f}%",
-                'resets_at': seven_day.get('resets_at'),
-                'resets_at_local': self._parse_timestamp(seven_day.get('resets_at')),
-                'time_until_reset': self._time_until(seven_day.get('resets_at')),
+        if "seven_day" in data and data["seven_day"]:
+            seven_day = data["seven_day"]
+            result["seven_day"] = {
+                "utilization": seven_day.get("utilization", 0),
+                "utilization_percent": f"{seven_day.get('utilization', 0):.1f}%",
+                "resets_at": seven_day.get("resets_at"),
+                "resets_at_local": self._parse_timestamp(seven_day.get("resets_at")),
+                "time_until_reset": self._time_until(seven_day.get("resets_at")),
             }
 
         # Include raw data for reference
-        result['raw'] = data
+        result["raw"] = data
 
         return result
 
@@ -232,8 +240,8 @@ class ClaudeUsageChecker:
         if not ts_str:
             return None
         try:
-            dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-            return dt.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
         except Exception:
             return ts_str
 
@@ -243,7 +251,7 @@ class ClaudeUsageChecker:
         if not ts_str:
             return None
         try:
-            dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             now = datetime.now(dt.tzinfo)
             delta = dt - now
 
@@ -281,51 +289,28 @@ class ClaudeUsageChecker:
         return parsed
 
     @staticmethod
+    def _print_limit_section(name: str, data: dict) -> None:
+        """Pretty print a single usage limit section"""
+        u = data["utilization"]
+        status = "🔴 CRITICAL" if u >= 90 else ("🟡 HIGH" if u >= 70 else "🟢 OK")
+        print(f"\n{name}: {status}")
+        print(f"   Utilization: {data['utilization_percent']}")
+        print(f"   Resets in:   {data['time_until_reset']}")
+        print(f"   Reset time:  {data['resets_at_local']}")
+
+    @staticmethod
     def _print_usage(parsed: dict):
         """Pretty print usage information"""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("Claude Usage Limits")
-        print("="*60)
+        print("=" * 60)
+        if "five_hour" in parsed:
+            ClaudeUsageChecker._print_limit_section("5-Hour Session Limit", parsed["five_hour"])
+        if "seven_day" in parsed:
+            ClaudeUsageChecker._print_limit_section("7-Day Weekly Limit", parsed["seven_day"])
+        print("\n" + "=" * 60 + "\n")
 
-        # 5-hour limit
-        if 'five_hour' in parsed:
-            data = parsed['five_hour']
-            utilization = data['utilization']
-
-            # Color code based on utilization
-            if utilization >= 90:
-                status = "🔴 CRITICAL"
-            elif utilization >= 70:
-                status = "🟡 HIGH"
-            else:
-                status = "🟢 OK"
-
-            print(f"\n5-Hour Session Limit: {status}")
-            print(f"   Utilization: {data['utilization_percent']}")
-            print(f"   Resets in:   {data['time_until_reset']}")
-            print(f"   Reset time:  {data['resets_at_local']}")
-
-        # 7-day limit
-        if 'seven_day' in parsed:
-            data = parsed['seven_day']
-            utilization = data['utilization']
-
-            # Color code based on utilization
-            if utilization >= 90:
-                status = "🔴 CRITICAL"
-            elif utilization >= 70:
-                status = "🟡 HIGH"
-            else:
-                status = "🟢 OK"
-
-            print(f"\n7-Day Weekly Limit: {status}")
-            print(f"   Utilization: {data['utilization_percent']}")
-            print(f"   Resets in:   {data['time_until_reset']}")
-            print(f"   Reset time:  {data['resets_at_local']}")
-
-        print("\n" + "="*60 + "\n")
-
-    def is_limit_exceeded(self, threshold: float = 95.0) -> tuple[bool, str | None]:
+    def is_limit_exceeded(self, threshold: float = 95.0) -> tuple[bool, str | None, dict | None]:
         """
         Check if usage limit is exceeded.
 
@@ -333,29 +318,29 @@ class ClaudeUsageChecker:
             threshold: Utilization threshold percentage (0-100)
 
         Returns:
-            tuple: (is_exceeded, reason)
+            tuple: (is_exceeded, reason, parsed_data)
         """
         try:
             usage_data = self.fetch_usage()
             parsed = self.parse_usage(usage_data)
 
             # Check 5-hour limit
-            if 'five_hour' in parsed:
-                util = parsed['five_hour']['utilization']
+            if "five_hour" in parsed:
+                util = parsed["five_hour"]["utilization"]
                 if util >= threshold:
-                    return True, f"5-hour limit at {util:.1f}%"
+                    return True, f"5-hour limit at {util:.1f}%", parsed
 
             # Check 7-day limit
-            if 'seven_day' in parsed:
-                util = parsed['seven_day']['utilization']
+            if "seven_day" in parsed:
+                util = parsed["seven_day"]["utilization"]
                 if util >= threshold:
-                    return True, f"7-day limit at {util:.1f}%"
+                    return True, f"7-day limit at {util:.1f}%", parsed
 
-            return False, None
+            return False, None, None
 
         except Exception as e:
             logger.warning(f"Failed to check usage limits: {e}")
-            return False, None
+            return False, None, None
 
 
 @dataclass
@@ -408,8 +393,10 @@ class TaskQueue:
         if session_name is not None:
             if not session_name.strip():
                 raise ValidationError("Session name cannot be empty string")
-            if not session_name.replace('-', '').replace('_', '').isalnum():
-                raise ValidationError("Session name must contain only alphanumeric characters, hyphens, and underscores")
+            if not session_name.replace("-", "").replace("_", "").isalnum():
+                raise ValidationError(
+                    "Session name must contain only alphanumeric characters, hyphens, and underscores"
+                )
             if len(session_name) > 100:
                 raise ValidationError("Session name too long (max 100 characters)")
 
@@ -439,7 +426,12 @@ class TaskQueue:
             if not working_path.is_dir():
                 raise ValidationError(f"Working directory is not a directory: {working_dir}")
 
-    def _validate_dependencies(self, depends_on: list[str] | None, task_id: str | None = None) -> None:
+    def _validate_dependencies(
+        self,
+        depends_on: list[str] | None,
+        task_id: str | None = None,
+        existing_tasks: list[Task] | None = None,
+    ) -> None:
         """Validate task dependencies"""
         if not depends_on:
             return
@@ -454,8 +446,9 @@ class TaskQueue:
         if task_id and task_id in depends_on:
             raise ValidationError("Task cannot depend on itself")
 
-        # Load existing tasks to validate dependencies exist
-        existing_tasks = self._load_tasks()
+        # Use pre-loaded tasks if provided to avoid a second file read
+        if existing_tasks is None:
+            existing_tasks = self._load_tasks()
         existing_ids = {task.id for task in existing_tasks}
 
         for dep_id in depends_on:
@@ -466,8 +459,9 @@ class TaskQueue:
         if task_id:
             self._check_circular_dependencies(task_id, depends_on, existing_tasks)
 
-    def _check_circular_dependencies(self, task_id: str, depends_on: list[str],
-                                     all_tasks: list[Task]) -> None:
+    def _check_circular_dependencies(
+        self, task_id: str, depends_on: list[str], all_tasks: list[Task]
+    ) -> None:
         """Check for circular dependencies using DFS"""
         task_map = {task.id: task for task in all_tasks}
         visited = set()
@@ -538,7 +532,7 @@ class TaskQueue:
         except json.JSONDecodeError as e:
             logger.error(f"Corrupted queue file: {e}")
             # Backup corrupted file
-            backup_path = self.queue_file.with_suffix('.json.backup')
+            backup_path = self.queue_file.with_suffix(".json.backup")
             shutil.copy(self.queue_file, backup_path)
             logger.info(f"Backed up corrupted queue to: {backup_path}")
             raise QueueFileError(f"Corrupted queue file (backed up to {backup_path})") from e
@@ -552,11 +546,11 @@ class TaskQueue:
         try:
             # Write to temporary file first
             with tempfile.NamedTemporaryFile(
-                mode='w',
+                mode="w",
                 dir=self.queue_file.parent,
-                prefix='.tasks_tmp_',
-                suffix='.json',
-                delete=False
+                prefix=".tasks_tmp_",
+                suffix=".json",
+                delete=False,
             ) as f:
                 temp_file = Path(f.name)
                 # Acquire exclusive lock for writing
@@ -577,10 +571,15 @@ class TaskQueue:
                 temp_file.unlink()
             raise QueueFileError(f"Failed to save tasks: {e}") from e
 
-    def add_task(self, prompt: str, session_name: str | None = None,
-                 max_attempts: int = 3, priority: int = 0,
-                 depends_on: list[str] | None = None,
-                 working_dir: str | None = None) -> Task:
+    def add_task(
+        self,
+        prompt: str,
+        session_name: str | None = None,
+        max_attempts: int = 3,
+        priority: int = 0,
+        depends_on: list[str] | None = None,
+        working_dir: str | None = None,
+    ) -> Task:
         # Validate inputs
         self._validate_prompt(prompt)
         self._validate_session_name(session_name)
@@ -591,10 +590,10 @@ class TaskQueue:
         tasks = self._load_tasks()
 
         # Generate unique ID
-        task_id = f"task-{int(time.time())}-{len(tasks)}"
+        task_id = f"task-{uuid.uuid4().hex[:12]}"
 
-        # Validate dependencies after generating task_id
-        self._validate_dependencies(depends_on, task_id)
+        # Validate dependencies after generating task_id (reuse already-loaded tasks)
+        self._validate_dependencies(depends_on, task_id, existing_tasks=tasks)
 
         task = Task(
             id=task_id,
@@ -605,7 +604,7 @@ class TaskQueue:
             max_attempts=max_attempts,
             priority=priority,
             depends_on=depends_on,
-            working_dir=working_dir
+            working_dir=working_dir,
         )
 
         tasks.append(task)
@@ -621,7 +620,8 @@ class TaskQueue:
         tasks = self._load_tasks()
 
         queued_tasks = [
-            t for t in tasks
+            t
+            for t in tasks
             if t.status in [TaskStatus.QUEUED.value, TaskStatus.RATE_LIMITED.value]
             and t.attempts < t.max_attempts
             and self._dependencies_satisfied(t, tasks)  # Check dependencies
@@ -642,6 +642,8 @@ class TaskQueue:
                 for key, value in updates.items():
                     setattr(task, key, value)
                 break
+        else:
+            raise QueueError(f"Task {task_id} not found")
 
         self._save_tasks(tasks)
 
@@ -661,26 +663,42 @@ class TaskQueue:
 
     def get_stats(self):
         tasks = self._load_tasks()
+        counts = Counter(t.status for t in tasks)
         return {
-            'total': len(tasks),
-            'queued': len([t for t in tasks if t.status == TaskStatus.QUEUED.value]),
-            'running': len([t for t in tasks if t.status == TaskStatus.RUNNING.value]),
-            'completed': len([t for t in tasks if t.status == TaskStatus.COMPLETED.value]),
-            'failed': len([t for t in tasks if t.status == TaskStatus.FAILED.value]),
-            'rate_limited': len([t for t in tasks if t.status == TaskStatus.RATE_LIMITED.value]),
+            "total": len(tasks),
+            "queued": counts[TaskStatus.QUEUED.value],
+            "running": counts[TaskStatus.RUNNING.value],
+            "completed": counts[TaskStatus.COMPLETED.value],
+            "failed": counts[TaskStatus.FAILED.value],
+            "rate_limited": counts[TaskStatus.RATE_LIMITED.value],
         }
 
 
 class ClaudeWorker:
     """Executes tasks from queue with retry logic"""
 
-    def __init__(self, queue: TaskQueue, base_retry_delay: int = 60, usage_checker: ClaudeUsageChecker | None = None, save_output: bool = False, output_dir: Path | None = None):
+    def __init__(
+        self,
+        queue: TaskQueue,
+        base_retry_delay: int = 60,
+        usage_checker: ClaudeUsageChecker | None = None,
+        save_output: bool = False,
+        output_dir: Path | None = None,
+        stream_output: bool = False,
+        usage_threshold: float = 95.0,
+        idle: bool = False,
+        idle_interval: int = 30,
+    ):
         self.queue = queue
         self.base_retry_delay = base_retry_delay
         self.usage_checker = usage_checker
         self.running = True
         self.save_output = save_output
-        self.output_dir = output_dir or (Path.home() / '.claude-queue' / 'outputs')
+        self.stream_output = stream_output
+        self.usage_threshold = usage_threshold
+        self.idle = idle
+        self.idle_interval = idle_interval
+        self.output_dir = output_dir or (Path.home() / ".claude-queue" / "outputs")
 
         if self.save_output:
             self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -693,39 +711,38 @@ class ClaudeWorker:
         - retry_after: seconds to wait (int or None)
         - error_message: the actual error message
         """
-        info = {
-            'retry_after': None,
-            'error_message': stderr[:500]
-        }
+        info = {"retry_after": None, "error_message": stderr[:500]}
 
         # Try to extract retry-after seconds from error message
         # Common patterns: "retry after X seconds", "wait X seconds", "try again in X seconds"
         retry_patterns = [
-            r'retry\s+after\s+(\d+)\s+seconds?',
-            r'wait\s+(\d+)\s+seconds?',
-            r'try\s+again\s+in\s+(\d+)\s+seconds?',
-            r'retry-after:\s*(\d+)',
+            r"retry\s+after\s+(\d+)\s+seconds?",
+            r"wait\s+(\d+)\s+seconds?",
+            r"try\s+again\s+in\s+(\d+)\s+seconds?",
+            r"retry-after:\s*(\d+)",
         ]
 
         for pattern in retry_patterns:
             match = re.search(pattern, stderr.lower())
             if match:
-                info['retry_after'] = int(match.group(1))
+                info["retry_after"] = int(match.group(1))  # type: ignore[assignment]
                 logger.info(f"Found retry-after: {info['retry_after']}s")
                 break
 
-        return info
+        return info  # type: ignore[return-value]
 
-    def calculate_wait_time(self, rate_limit_info: dict[str, int | str | None], task: Task) -> int | None:
+    def calculate_wait_time(
+        self, rate_limit_info: dict[str, int | str | None], task: Task
+    ) -> int | None:
         """
         Calculate how long to wait before retrying based on retry-after header.
 
         Returns None if rate limit info cannot be extracted, indicating the task should fail.
         """
-        if rate_limit_info['retry_after'] is not None:
-            wait_seconds = rate_limit_info['retry_after']
+        if rate_limit_info["retry_after"] is not None:
+            wait_seconds = rate_limit_info["retry_after"]
             logger.info(f"Using retry-after: {wait_seconds}s")
-            return max(wait_seconds, 1)  # Ensure at least 1 second
+            return max(int(wait_seconds), 1)
 
         # No rate limit info available
         logger.error("Could not extract retry-after from rate limit error")
@@ -738,93 +755,96 @@ class ClaudeWorker:
 
         while True:
             try:
-                exceeded, reason = self.usage_checker.is_limit_exceeded(threshold=95.0)
+                exceeded, reason, parsed = self.usage_checker.is_limit_exceeded(
+                    threshold=self.usage_threshold
+                )
 
                 if not exceeded:
                     return  # Limits are OK, proceed
 
-                # Limits exceeded, get reset time
-                usage_data = self.usage_checker.fetch_usage()
-                parsed = self.usage_checker.parse_usage(usage_data)
-
                 # Find which limit is exceeded and when it resets
                 reset_info = None
-                if 'five_hour' in parsed and parsed['five_hour']['utilization'] >= 95.0:
-                    reset_info = parsed['five_hour']
+                limit_name = None
+                if (
+                    parsed
+                    and "five_hour" in parsed
+                    and parsed["five_hour"]["utilization"] >= self.usage_threshold
+                ):
+                    reset_info = parsed["five_hour"]
                     limit_name = "5-hour session limit"
-                elif 'seven_day' in parsed and parsed['seven_day']['utilization'] >= 95.0:
-                    reset_info = parsed['seven_day']
+                elif (
+                    parsed
+                    and "seven_day" in parsed
+                    and parsed["seven_day"]["utilization"] >= self.usage_threshold
+                ):
+                    reset_info = parsed["seven_day"]
                     limit_name = "7-day weekly limit"
 
                 if reset_info:
-                    # Calculate seconds until reset
-                    reset_timestamp = reset_info.get('resets_at')
+                    reset_timestamp = reset_info.get("resets_at")
                     if reset_timestamp:
                         try:
-                            reset_dt = datetime.fromisoformat(reset_timestamp.replace('Z', '+00:00'))
+                            reset_dt = datetime.fromisoformat(
+                                reset_timestamp.replace("Z", "+00:00")
+                            )
                             now = datetime.now(reset_dt.tzinfo)
                             seconds_until_reset = int((reset_dt - now).total_seconds())
 
-                            # If already reset, continue
                             if seconds_until_reset <= 0:
                                 return
 
-                            # Show message once
-                            print(f"\n{'='*60}")
+                            print(f"\n{'=' * 60}")
                             print(f"⚠ Usage limit exceeded: {reason}")
-                            print(f"{'='*60}")
+                            print(f"{'=' * 60}")
                             print(f"{limit_name}: {reset_info['utilization_percent']}")
                             print(f"Resets in:   {reset_info['time_until_reset']}")
                             print(f"Reset time:  {reset_info['resets_at_local']}")
                             print(f"\nSleeping until reset ({reset_info['time_until_reset']})...")
-                            print(f"{'='*60}\n")
+                            print(f"{'=' * 60}\n")
 
-                            # Sleep until reset (add 10 seconds buffer)
                             time.sleep(seconds_until_reset + 10)
                             return  # Re-check limits after wake
                         except Exception as e:
                             logger.warning(f"Could not parse reset time: {e}")
                             time.sleep(300)  # Fallback: wait 5 minutes
                     else:
-                        # Couldn't determine reset time, wait a bit
                         logger.warning("Limit exceeded but couldn't determine reset time")
                         time.sleep(300)
                 else:
-                    # Couldn't determine reset time, wait a bit and retry
                     logger.warning("Limit exceeded but couldn't determine reset time")
                     time.sleep(60)
 
             except Exception as e:
                 logger.error(f"Error checking usage limits: {e}")
-                # Don't block the worker if limit checking fails
                 return
 
     def execute_task(self, task: Task) -> bool:
         """Execute a single task. Returns True if successful."""
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Executing task: {task.id}")
         print(f"Session: {task.session_name}")
         if task.working_dir:
             print(f"Working dir: {task.working_dir}")
         print(f"Attempt: {task.attempts + 1}/{task.max_attempts}")
-        print(f"Prompt: {task.prompt[:100]}..." if len(task.prompt) > 100 else f"Prompt: {task.prompt}")
-        print(f"{'='*60}\n")
+        print(
+            f"Prompt: {task.prompt[:100]}..."
+            if len(task.prompt) > 100
+            else f"Prompt: {task.prompt}"
+        )
+        print(f"{'=' * 60}\n")
 
         # Update task status
         self.queue.update_task(
             task.id,
             status=TaskStatus.RUNNING.value,
             started_at=datetime.now().isoformat(),
-            attempts=task.attempts + 1
+            attempts=task.attempts + 1,
         )
 
         try:
             # Build Claude command
-            cmd = [
-                'claude',
-                '-p', task.prompt
-            ]
+            cmd = ["claude", "-p", task.prompt]
 
             # Determine working directory
             cwd = None
@@ -833,13 +853,15 @@ class ClaudeWorker:
                 logger.info(f"Executing in directory: {cwd}")
 
             # Execute Claude
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600,  # 1 hour timeout
-                cwd=cwd
-            )
+            if self.stream_output:
+                # Stream stdout to terminal; capture stderr for rate-limit detection
+                result = subprocess.run(
+                    cmd, stdout=None, stderr=subprocess.PIPE, text=True, timeout=3600, cwd=cwd
+                )
+                stdout_out, stderr_out = "", result.stderr
+            else:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, cwd=cwd)
+                stdout_out, stderr_out = result.stdout, result.stderr
 
             if result.returncode == 0:
                 print(f"✓ Task {task.id} completed successfully")
@@ -848,12 +870,12 @@ class ClaudeWorker:
                 if self.save_output:
                     output_file = self.output_dir / f"{task.id}.txt"
                     try:
-                        with open(output_file, 'w') as f:
+                        with open(output_file, "w") as f:
                             f.write(f"Task: {task.id}\n")
                             f.write(f"Session: {task.session_name}\n")
                             f.write(f"Completed: {datetime.now().isoformat()}\n")
-                            f.write("="*60 + "\n")
-                            f.write(result.stdout)
+                            f.write("=" * 60 + "\n")
+                            f.write(stdout_out)
                         print(f"  Output saved to: {output_file}")
                     except Exception as e:
                         logger.warning(f"Failed to save output: {e}")
@@ -861,47 +883,41 @@ class ClaudeWorker:
                 self.queue.update_task(
                     task.id,
                     status=TaskStatus.COMPLETED.value,
-                    completed_at=datetime.now().isoformat()
+                    completed_at=datetime.now().isoformat(),
                 )
                 return True
             else:
                 # Check if rate limited
-                if 'rate limit' in result.stderr.lower() or 'rate_limit' in result.stderr.lower():
+                if "rate limit" in stderr_out.lower() or "rate_limit" in stderr_out.lower():
                     print(f"⏸ Task {task.id} hit rate limit")
 
                     # Parse rate limit information from error
-                    rate_limit_info = self.parse_rate_limit_info(result.stderr)
+                    rate_limit_info = self.parse_rate_limit_info(stderr_out)
 
                     self.queue.update_task(
                         task.id,
                         status=TaskStatus.RATE_LIMITED.value,
-                        last_error=rate_limit_info['error_message']
+                        last_error=rate_limit_info["error_message"],
                     )
                     return False
                 else:
-                    print(f"✗ Task {task.id} failed: {result.stderr[:200]}")
+                    print(f"✗ Task {task.id} failed: {stderr_out[:200]}")
 
                     # Check if max attempts reached
                     if task.attempts + 1 >= task.max_attempts:
                         self.queue.update_task(
-                            task.id,
-                            status=TaskStatus.FAILED.value,
-                            last_error=result.stderr[:500]
+                            task.id, status=TaskStatus.FAILED.value, last_error=stderr_out[:500]
                         )
                     else:
                         self.queue.update_task(
-                            task.id,
-                            status=TaskStatus.QUEUED.value,
-                            last_error=result.stderr[:500]
+                            task.id, status=TaskStatus.QUEUED.value, last_error=stderr_out[:500]
                         )
                     return False
 
         except subprocess.TimeoutExpired:
             print(f"⏱ Task {task.id} timed out")
             self.queue.update_task(
-                task.id,
-                status=TaskStatus.QUEUED.value,
-                last_error="Execution timeout"
+                task.id, status=TaskStatus.QUEUED.value, last_error="Execution timeout"
             )
             return False
 
@@ -909,8 +925,10 @@ class ClaudeWorker:
             print(f"✗ Task {task.id} error: {str(e)}")
             self.queue.update_task(
                 task.id,
-                status=TaskStatus.FAILED.value if task.attempts + 1 >= task.max_attempts else TaskStatus.QUEUED.value,
-                last_error=str(e)
+                status=TaskStatus.FAILED.value
+                if task.attempts + 1 >= task.max_attempts
+                else TaskStatus.QUEUED.value,
+                last_error=str(e),
             )
             return False
 
@@ -918,6 +936,15 @@ class ClaudeWorker:
         """Main worker loop"""
         print("Claude Code Task Worker Started")
         print("Press Ctrl+C to stop\n")
+
+        # Reset tasks stuck in RUNNING from a previously interrupted worker
+        running_tasks = [
+            t for t in self.queue.get_all_tasks() if t.status == TaskStatus.RUNNING.value
+        ]
+        if running_tasks:
+            print(f"⚠ Resetting {len(running_tasks)} interrupted task(s) to queued")
+            for t in running_tasks:
+                self.queue.update_task(t.id, status=TaskStatus.QUEUED.value)
 
         try:
             while self.running:
@@ -927,7 +954,15 @@ class ClaudeWorker:
                 task = self.queue.get_next_task()
 
                 if task is None:
-                    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] No tasks in queue. Worker exiting.")
+                    if self.idle:
+                        print(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] No tasks. Polling again in {self.idle_interval}s..."
+                        )
+                        time.sleep(self.idle_interval)
+                        continue
+                    print(
+                        f"\n[{datetime.now().strftime('%H:%M:%S')}] No tasks in queue. Worker exiting."
+                    )
                     break
 
                 success = self.execute_task(task)
@@ -947,11 +982,13 @@ class ClaudeWorker:
 
                         if delay is None:
                             # Could not extract rate limit info - fail the task
-                            print("\n✗ Could not extract retry-after from rate limit error. Marking task as failed.\n")
+                            print(
+                                "\n✗ Could not extract retry-after from rate limit error. Marking task as failed.\n"
+                            )
                             self.queue.update_task(
                                 updated_task.id,
                                 status=TaskStatus.FAILED.value,
-                                last_error="Rate limited but could not extract retry-after information"
+                                last_error="Rate limited but could not extract retry-after information",
                             )
                         else:
                             # Wait for the specified time
@@ -978,30 +1015,37 @@ def cmd_add(args, queue: TaskQueue):
         session_name=args.session,
         max_attempts=args.max_attempts,
         priority=args.priority,
-        working_dir=getattr(args, 'working_dir', None)
+        working_dir=getattr(args, "working_dir", None),
     )
     print(f"✓ Task added: {task.id}")
     print(f"  Session: {task.session_name}")
     print(f"  Priority: {task.priority}")
     if task.working_dir:
         print(f"  Working dir: {task.working_dir}")
-    print(f"  Prompt: {task.prompt[:80]}..." if len(task.prompt) > 80 else f"  Prompt: {task.prompt}")
+    print(
+        f"  Prompt: {task.prompt[:80]}..." if len(task.prompt) > 80 else f"  Prompt: {task.prompt}"
+    )
 
 
 def cmd_worker(args, queue: TaskQueue):
     """Start worker process"""
     # Usage limit checking is mandatory
     try:
-        usage_checker = ClaudeUsageChecker(
-            session_key=args.session_key,
-            api_url=args.api_url
-        )
+        usage_checker = ClaudeUsageChecker(session_key=args.session_key, api_url=args.api_url)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    worker = ClaudeWorker(queue, base_retry_delay=args.retry_delay, usage_checker=usage_checker,
-                         save_output=args.save_output)
+    worker = ClaudeWorker(
+        queue,
+        base_retry_delay=args.retry_delay,
+        usage_checker=usage_checker,
+        save_output=args.save_output,
+        stream_output=args.stream,
+        usage_threshold=args.threshold,
+        idle=args.idle,
+        idle_interval=args.idle_interval,
+    )
     worker.run()
 
 
@@ -1055,7 +1099,9 @@ def cmd_list(args, queue: TaskQueue):
         }.get(task.status, "?")
 
         print(f"{status_icon} {task.id}")
-        print(f"   Status: {task.status} | Priority: {task.priority} | Attempts: {task.attempts}/{task.max_attempts}")
+        print(
+            f"   Status: {task.status} | Priority: {task.priority} | Attempts: {task.attempts}/{task.max_attempts}"
+        )
         print(f"   Session: {task.session_name}")
         if task.working_dir:
             print(f"   Working dir: {task.working_dir}")
@@ -1069,7 +1115,9 @@ def cmd_list(args, queue: TaskQueue):
             print(f"   Dependencies: {deps_display}")
 
         if task.last_error:
-            error_preview = task.last_error[:80] + "..." if len(task.last_error) > 80 else task.last_error
+            error_preview = (
+                task.last_error[:80] + "..." if len(task.last_error) > 80 else task.last_error
+            )
             print(f"   Last Error: {error_preview}")
 
         print()
@@ -1093,17 +1141,15 @@ def load_batch_file(file_path: Path) -> list[dict]:
         raise QueueFileError(f"File not found: {file_path}")
 
     # Determine file type and load
-    if file_path.suffix in ['.yaml', '.yml']:
+    if file_path.suffix in [".yaml", ".yml"]:
         if not HAS_YAML:
-            raise QueueError(
-                "PyYAML not installed. Install with: pip install pyyaml"
-            )
+            raise QueueError("PyYAML not installed. Install with: pip install pyyaml")
         try:
             with open(file_path) as f:
                 data = yaml.safe_load(f)
         except yaml.YAMLError as e:
             raise QueueFileError(f"Invalid YAML file: {e}") from e
-    elif file_path.suffix == '.json':
+    elif file_path.suffix == ".json":
         try:
             with open(file_path) as f:
                 data = json.load(f)
@@ -1115,12 +1161,10 @@ def load_batch_file(file_path: Path) -> list[dict]:
         )
 
     # Extract tasks
-    if not isinstance(data, dict) or 'tasks' not in data:
-        raise ValidationError(
-            "Invalid file format. Expected a dictionary with 'tasks' key"
-        )
+    if not isinstance(data, dict) or "tasks" not in data:
+        raise ValidationError("Invalid file format. Expected a dictionary with 'tasks' key")
 
-    tasks = data['tasks']
+    tasks = data["tasks"]
     if not isinstance(tasks, list):
         raise ValidationError("'tasks' must be a list")
 
@@ -1128,7 +1172,7 @@ def load_batch_file(file_path: Path) -> list[dict]:
     for i, task in enumerate(tasks, 1):
         if not isinstance(task, dict):
             raise ValidationError(f"Task {i}: must be a dictionary")
-        if 'prompt' not in task:
+        if "prompt" not in task:
             raise ValidationError(f"Task {i}: missing required field 'prompt'")
 
     return tasks
@@ -1137,10 +1181,7 @@ def load_batch_file(file_path: Path) -> list[dict]:
 def cmd_usage(args):
     """Check Claude usage limits"""
     try:
-        checker = ClaudeUsageChecker(
-            session_key=args.session_key,
-            api_url=args.api_url
-        )
+        checker = ClaudeUsageChecker(session_key=args.session_key, api_url=args.api_url)
         checker.check_usage(json_output=args.json)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -1162,11 +1203,11 @@ def cmd_batch(args, queue: TaskQueue):
     if args.dry_run:
         print("\nDRY RUN - Tasks that would be added:\n")
         for i, task_data in enumerate(tasks, 1):
-            session = task_data.get('session', 'auto-generated')
-            priority = task_data.get('priority', 0)
-            max_attempts = task_data.get('max_attempts', 3)
-            depends_on = task_data.get('depends_on', [])
-            prompt = task_data['prompt']
+            session = task_data.get("session", "auto-generated")
+            priority = task_data.get("priority", 0)
+            max_attempts = task_data.get("max_attempts", 3)
+            depends_on = task_data.get("depends_on", [])
+            prompt = task_data["prompt"]
             prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
 
             print(f"{i}. Session: {session}")
@@ -1183,16 +1224,16 @@ def cmd_batch(args, queue: TaskQueue):
 
     added_count = 0
     failed_count = 0
-    session_to_id = {}  # Map session names to task IDs
+    session_to_id: dict[str, str] = {}  # Map session names to task IDs
 
     # Separate tasks by dependency status
     remaining_tasks = list(tasks)  # Copy of all tasks to process
     pass_number = 1
 
     while remaining_tasks:
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(f"PASS {pass_number}: Processing remaining tasks")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         tasks_added_this_pass = 0
         still_remaining = []
@@ -1200,7 +1241,7 @@ def cmd_batch(args, queue: TaskQueue):
         for task_data in remaining_tasks:
             try:
                 # Resolve session names to task IDs for dependencies
-                depends_on_sessions = task_data.get('depends_on', [])
+                depends_on_sessions = task_data.get("depends_on", [])
                 depends_on_ids = []
 
                 if depends_on_sessions:
@@ -1221,38 +1262,44 @@ def cmd_batch(args, queue: TaskQueue):
 
                 # Add the task
                 task = queue.add_task(
-                    prompt=task_data['prompt'],
-                    session_name=task_data.get('session'),
-                    priority=task_data.get('priority', 0),
-                    max_attempts=task_data.get('max_attempts', 3),
+                    prompt=task_data["prompt"],
+                    session_name=task_data.get("session"),
+                    priority=task_data.get("priority", 0),
+                    max_attempts=task_data.get("max_attempts", 3),
                     depends_on=depends_on_ids if depends_on_ids else None,
-                    working_dir=task_data.get('working_dir')
+                    working_dir=task_data.get("working_dir"),
                 )
-                session_display = task.session_name or 'auto-generated'
+                session_display = task.session_name or "auto-generated"
 
                 # Store mapping for dependency resolution
-                if task_data.get('session'):
-                    session_to_id[task_data['session']] = task.id
+                if task_data.get("session"):
+                    session_to_id[task_data["session"]] = task.id
 
                 prompt_preview = task.prompt[:50] + "..." if len(task.prompt) > 50 else task.prompt
-                dep_display = f" (depends on: {', '.join(depends_on_sessions)})" if depends_on_sessions else ""
+                dep_display = (
+                    f" (depends on: {', '.join(depends_on_sessions)})"
+                    if depends_on_sessions
+                    else ""
+                )
                 print(f"✓ Added: {session_display} - {prompt_preview}{dep_display}")
                 added_count += 1
                 tasks_added_this_pass += 1
 
             except (ValidationError, QueueError) as e:
                 # Task failed validation (e.g., circular dependency)
-                session_display = task_data.get('session', 'unnamed')
+                session_display = task_data.get("session", "unnamed")
                 print(f"✗ Failed: {session_display} - {e}")
                 failed_count += 1
 
         # Check if we made progress
         if tasks_added_this_pass == 0 and still_remaining:
             # No progress made, remaining tasks have unresolvable dependencies
-            print(f"\n⚠ No progress in pass {pass_number}. Remaining tasks have circular or missing dependencies:")
+            print(
+                f"\n⚠ No progress in pass {pass_number}. Remaining tasks have circular or missing dependencies:"
+            )
             for task_data in still_remaining:
-                session_display = task_data.get('session', 'unnamed')
-                deps = ', '.join(task_data.get('depends_on', []))
+                session_display = task_data.get("session", "unnamed")
+                deps = ", ".join(task_data.get("depends_on", []))
                 print(f"✗ Failed: {session_display} - Cannot resolve dependencies: {deps}")
                 failed_count += 1
             break
@@ -1261,11 +1308,11 @@ def cmd_batch(args, queue: TaskQueue):
         pass_number += 1
 
     # Summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Added {added_count} tasks to queue")
     if failed_count > 0:
         print(f"Failed to add {failed_count} tasks")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Show how to start worker
     if added_count > 0:
@@ -1277,59 +1324,102 @@ def main():
     parser = argparse.ArgumentParser(
         description="Claude Code Task Queue Manager\n\nFor examples and documentation, see README.md",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        add_help=False
+        add_help=False,
     )
 
     # Queue file location
-    default_queue = Path.home() / '.claude-queue' / 'tasks.json'
-    parser.add_argument('--queue-file', type=Path, default=default_queue,
-                       help='Queue file location (default: ~/.claude-queue/tasks.json)')
+    default_queue = Path.home() / ".claude-queue" / "tasks.json"
+    parser.add_argument(
+        "--queue-file",
+        type=Path,
+        default=default_queue,
+        help="Queue file location (default: ~/.claude-queue/tasks.json)",
+    )
 
-    subparsers = parser.add_subparsers(dest='command', required=False)
+    subparsers = parser.add_subparsers(dest="command", required=False)
 
     # Add command
-    add_parser = subparsers.add_parser('add', help='Add task to queue')
-    add_parser.add_argument('prompt', help='Task prompt/description')
-    add_parser.add_argument('--session', help='Session name (auto-generated if not provided)')
-    add_parser.add_argument('--max-attempts', type=int, default=3, help='Max retry attempts (default: 3)')
-    add_parser.add_argument('--priority', type=int, default=0, help='Task priority (higher = first, default: 0)')
-    add_parser.add_argument('--working-dir', help='Working directory for task execution (default: current directory)')
+    add_parser = subparsers.add_parser("add", help="Add task to queue")
+    add_parser.add_argument("prompt", help="Task prompt/description")
+    add_parser.add_argument("--session", help="Session name (auto-generated if not provided)")
+    add_parser.add_argument(
+        "--max-attempts", type=int, default=3, help="Max retry attempts (default: 3)"
+    )
+    add_parser.add_argument(
+        "--priority", type=int, default=0, help="Task priority (higher = first, default: 0)"
+    )
+    add_parser.add_argument(
+        "--working-dir", help="Working directory for task execution (default: current directory)"
+    )
 
     # Worker command
-    worker_parser = subparsers.add_parser('worker', help='Start task worker (requires CLAUDE_SESSION_KEY env var)')
-    worker_parser.add_argument('--retry-delay', type=int, default=60,
-                              help='Base retry delay in seconds (default: 60)')
-    worker_parser.add_argument('--session-key', help='Claude session cookie for usage checking (or use CLAUDE_SESSION_KEY env var)')
-    worker_parser.add_argument('--api-url', help='Override API endpoint URL for usage checking')
-    worker_parser.add_argument('--save-output', action='store_true',
-                              help='Save task outputs to ~/.claude-queue/outputs/')
+    worker_parser = subparsers.add_parser(
+        "worker", help="Start task worker (requires CLAUDE_SESSION_KEY env var)"
+    )
+    worker_parser.add_argument(
+        "--retry-delay", type=int, default=60, help="Base retry delay in seconds (default: 60)"
+    )
+    worker_parser.add_argument(
+        "--session-key",
+        help="Claude session cookie for usage checking (or use CLAUDE_SESSION_KEY env var)",
+    )
+    worker_parser.add_argument("--api-url", help="Override API endpoint URL for usage checking")
+    worker_parser.add_argument(
+        "--save-output", action="store_true", help="Save task outputs to ~/.claude-queue/outputs/"
+    )
+    worker_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream Claude output to terminal in real-time (disables output saving)",
+    )
+    worker_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=95.0,
+        help="Usage percentage at which worker pauses (default: 95.0)",
+    )
+    worker_parser.add_argument(
+        "--idle",
+        action="store_true",
+        help="Keep worker running when queue is empty, polling for new tasks",
+    )
+    worker_parser.add_argument(
+        "--idle-interval",
+        type=int,
+        default=30,
+        help="Seconds between polls when idle (default: 30)",
+    )
 
     # Status command
-    subparsers.add_parser('status', help='Show queue status')
+    subparsers.add_parser("status", help="Show queue status")
 
     # List command
-    list_parser = subparsers.add_parser('list', help='List all tasks')
-    list_parser.add_argument('--status', choices=[s.value for s in TaskStatus],
-                            help='Filter by status')
+    list_parser = subparsers.add_parser("list", help="List all tasks")
+    list_parser.add_argument(
+        "--status", choices=[s.value for s in TaskStatus], help="Filter by status"
+    )
 
     # Remove command
-    remove_parser = subparsers.add_parser('remove', help='Remove task from queue')
-    remove_parser.add_argument('task_id', help='Task ID to remove')
+    remove_parser = subparsers.add_parser("remove", help="Remove task from queue")
+    remove_parser.add_argument("task_id", help="Task ID to remove")
 
     # Clear command
-    subparsers.add_parser('clear', help='Clear completed tasks')
+    subparsers.add_parser("clear", help="Clear completed tasks")
 
     # Batch command
-    batch_parser = subparsers.add_parser('batch', help='Load tasks from YAML/JSON file')
-    batch_parser.add_argument('file', type=Path, help='Task file (YAML or JSON)')
-    batch_parser.add_argument('--dry-run', action='store_true',
-                              help='Show tasks without adding them')
+    batch_parser = subparsers.add_parser("batch", help="Load tasks from YAML/JSON file")
+    batch_parser.add_argument("file", type=Path, help="Task file (YAML or JSON)")
+    batch_parser.add_argument(
+        "--dry-run", action="store_true", help="Show tasks without adding them"
+    )
 
     # Usage command
-    usage_parser = subparsers.add_parser('usage', help='Check Claude usage limits')
-    usage_parser.add_argument('--session-key', help='Claude session cookie (or use CLAUDE_SESSION_KEY env var)')
-    usage_parser.add_argument('--json', action='store_true', help='Output as JSON')
-    usage_parser.add_argument('--api-url', help='Override API endpoint URL')
+    usage_parser = subparsers.add_parser("usage", help="Check Claude usage limits")
+    usage_parser.add_argument(
+        "--session-key", help="Claude session cookie (or use CLAUDE_SESSION_KEY env var)"
+    )
+    usage_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    usage_parser.add_argument("--api-url", help="Override API endpoint URL")
 
     args = parser.parse_args()
 
@@ -1339,28 +1429,28 @@ def main():
         sys.exit(0)
 
     # Initialize queue (not needed for usage command)
-    queue = TaskQueue(args.queue_file) if args.command != 'usage' else None
+    queue = TaskQueue(args.queue_file) if args.command != "usage" else None
 
     # Execute command
-    if args.command == 'add':
+    if args.command == "add":
         cmd_add(args, queue)
-    elif args.command == 'worker':
+    elif args.command == "worker":
         cmd_worker(args, queue)
-    elif args.command == 'status':
+    elif args.command == "status":
         cmd_status(args, queue)
-    elif args.command == 'list':
+    elif args.command == "list":
         cmd_list(args, queue)
-    elif args.command == 'remove':
+    elif args.command == "remove":
         cmd_remove(args, queue)
-    elif args.command == 'clear':
+    elif args.command == "clear":
         cmd_clear(args, queue)
-    elif args.command == 'batch':
+    elif args.command == "batch":
         cmd_batch(args, queue)
-    elif args.command == 'usage':
+    elif args.command == "usage":
         cmd_usage(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except ValidationError as e:
