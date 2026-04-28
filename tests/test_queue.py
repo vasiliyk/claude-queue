@@ -3,6 +3,7 @@
 import pytest
 from claude_queue import (
     QueueFileError,
+    Task,
     TaskQueue,
     TaskStatus,
     ValidationError,
@@ -56,6 +57,16 @@ class TestTaskCreation:
         assert task1.id != task2.id
         assert task1.id.startswith("task-")
         assert task2.id.startswith("task-")
+
+    def test_from_dict_ignores_unknown_fields(self, temp_queue):
+        """Task.from_dict must silently drop fields added in future versions"""
+        task = temp_queue.add_task("Test prompt")
+        data = task.to_dict()
+        data["future_field"] = "value_from_newer_version"
+        restored = Task.from_dict(data)
+        assert restored.id == task.id
+        assert restored.prompt == task.prompt
+        assert not hasattr(restored, "future_field")
 
 
 class TestValidation:

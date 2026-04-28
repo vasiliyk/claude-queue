@@ -5,7 +5,27 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
-from claude_queue import ClaudeUsageChecker
+from claude_queue import ClaudeUsageChecker, SessionExpiredError
+
+
+@pytest.fixture
+def mocked_checker(mocker):
+    """Factory that creates a ClaudeUsageChecker with a mocked session.
+
+    The patch stays active for the full test via mocker (pytest-mock),
+    so calls to is_limit_exceeded / fetch_usage inside the test body work.
+    """
+    def _make(five_hour_util: float = 50.0, seven_day_util: float = 50.0):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "five_hour": {"utilization": five_hour_util, "resets_at": "2026-01-04T15:30:00.000000Z"},
+            "seven_day": {"utilization": seven_day_util, "resets_at": "2026-01-08T10:00:00.000000Z"},
+        }
+        mock_session = Mock()
+        mock_session.get.return_value = mock_response
+        mocker.patch("requests.Session", return_value=mock_session)
+        return ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
+    return _make
 
 
 @pytest.fixture
@@ -64,18 +84,17 @@ class TestUsageCheckerInit:
         mock_session.get.assert_called_once()
 
     @patch("requests.Session")
-    def test_auto_detect_org_id_failure(self, mock_session_class):
-        """Test organization ID detection failure"""
+    def test_auto_detect_org_id_401(self, mock_session_class):
+        """Test that a 401 during org detection raises SessionExpiredError"""
         mock_session = Mock()
         mock_response = Mock()
-        mock_response.status_code = 401
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
-            "401 Unauthorized"
-        )
+        http_error = requests.exceptions.HTTPError()
+        http_error.response = Mock(status_code=401)
+        mock_response.raise_for_status.side_effect = http_error
         mock_session.get.return_value = mock_response
         mock_session_class.return_value = mock_session
 
-        with pytest.raises(ValueError, match="Failed to auto-detect organization ID"):
+        with pytest.raises(SessionExpiredError, match="Session key expired"):
             ClaudeUsageChecker(session_key="test-key")
 
 
@@ -111,7 +130,7 @@ class TestFetchUsage:
 
             checker = ClaudeUsageChecker(session_key="invalid-key", org_id="test-org-id")
 
-            with pytest.raises(ValueError, match="Authentication failed"):
+            with pytest.raises(SessionExpiredError, match="Session key expired"):
                 checker.fetch_usage()
 
 
@@ -143,115 +162,38 @@ class TestParseUsage:
 class TestLimitChecking:
     """Test usage limit checking"""
 
-    def test_is_limit_exceeded_below_threshold(self):
-        """Test when usage is below threshold"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = {
-                "five_hour": {"utilization": 50.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-            mock_session.get.return_value = mock_response
-            mock_session_class.return_value = mock_session
+    def test_is_limit_exceeded_below_threshold(self, mocked_checker):
+        checker = mocked_checker(five_hour_util=50.0, seven_day_util=60.0)
+        exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
+        assert exceeded is False
+        assert reason is None
 
-            checker = ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
+    def test_is_limit_exceeded_session_limit(self, mocked_checker):
+        checker = mocked_checker(five_hour_util=96.0, seven_day_util=60.0)
+        exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
+        assert exceeded is True
+        assert "5-hour" in reason
 
-            exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
+    def test_is_limit_exceeded_weekly_limit(self, mocked_checker):
+        checker = mocked_checker(five_hour_util=50.0, seven_day_util=97.0)
+        exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
+        assert exceeded is True
+        assert "7-day" in reason
 
-            assert exceeded is False
-            assert reason is None
+    def test_is_limit_exceeded_both_limits(self, mocked_checker):
+        checker = mocked_checker(five_hour_util=96.0, seven_day_util=98.0)
+        exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
+        assert exceeded is True
+        assert "5-hour" in reason  # first exceeded limit wins
 
-    def test_is_limit_exceeded_session_limit(self):
-        """Test when session limit is exceeded"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = {
-                "five_hour": {"utilization": 96.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-            mock_session.get.return_value = mock_response
-            mock_session_class.return_value = mock_session
-
-            checker = ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
-
-            exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
-
-            assert exceeded is True
-            assert "5-hour" in reason
-
-    def test_is_limit_exceeded_weekly_limit(self):
-        """Test when weekly limit is exceeded"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = {
-                "five_hour": {"utilization": 50.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 97.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-            mock_session.get.return_value = mock_response
-            mock_session_class.return_value = mock_session
-
-            checker = ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
-
-            exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
-
-            assert exceeded is True
-            assert "7-day" in reason
-
-    def test_is_limit_exceeded_both_limits(self):
-        """Test when both limits are exceeded"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = {
-                "five_hour": {"utilization": 96.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 98.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-            mock_session.get.return_value = mock_response
-            mock_session_class.return_value = mock_session
-
-            checker = ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
-
-            exceeded, reason, _ = checker.is_limit_exceeded(threshold=95.0)
-
-            assert exceeded is True
-            # Should return first exceeded limit (5-hour)
-            assert "5-hour" in reason
-
-    def test_is_limit_exceeded_custom_threshold(self):
-        """Test limit checking with custom threshold"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-
-            # Mock for first call (95% threshold)
-            mock_response1 = Mock()
-            mock_response1.json.return_value = {
-                "five_hour": {"utilization": 85.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-
-            # Mock for second call (80% threshold)
-            mock_response2 = Mock()
-            mock_response2.json.return_value = {
-                "five_hour": {"utilization": 85.0, "resets_at": "2026-01-04T15:30:00.000000Z"},
-                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            }
-
-            mock_session.get.side_effect = [mock_response1, mock_response2]
-            mock_session_class.return_value = mock_session
-
-            checker = ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
-
-            # Should not exceed at 95% threshold
-            exceeded, _, _ = checker.is_limit_exceeded(threshold=95.0)
-            assert exceeded is False
-
-            # Should exceed at 80% threshold
-            exceeded, reason, _ = checker.is_limit_exceeded(threshold=80.0)
-            assert exceeded is True
-            assert "5-hour" in reason
+    def test_is_limit_exceeded_custom_threshold(self, mocked_checker):
+        """Same usage data, different thresholds give different results"""
+        checker = mocked_checker(five_hour_util=85.0, seven_day_util=60.0)
+        exceeded, _, _ = checker.is_limit_exceeded(threshold=95.0)
+        assert exceeded is False
+        exceeded, reason, _ = checker.is_limit_exceeded(threshold=80.0)
+        assert exceeded is True
+        assert "5-hour" in reason
 
 
 class TestUsageDisplay:
@@ -315,3 +257,25 @@ class TestTimeUntilReset:
         # Should return a formatted string
         assert result is not None
         assert isinstance(result, str)
+
+
+class TestValidateUsageResponse:
+    """Test usage API schema validation"""
+
+    def test_rejects_non_dict(self):
+        with pytest.raises(ValueError, match="unexpected format"):
+            ClaudeUsageChecker._validate_usage_response(["not", "a", "dict"])
+
+    def test_rejects_missing_expected_keys(self):
+        with pytest.raises(ValueError, match="missing expected keys"):
+            ClaudeUsageChecker._validate_usage_response({"unknown_key": 123})
+
+    def test_rejects_malformed_section(self):
+        with pytest.raises(ValueError, match="unexpected format in 'five_hour'"):
+            ClaudeUsageChecker._validate_usage_response({
+                "five_hour": {"no_utilization_key": 50.0},
+                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
+            })
+
+    def test_accepts_valid_response(self, mock_usage_data):
+        ClaudeUsageChecker._validate_usage_response(mock_usage_data)  # must not raise

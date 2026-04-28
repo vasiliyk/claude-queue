@@ -141,35 +141,103 @@ tasks:
 | `failed`       | Failed after max attempts  |
 | `rate_limited` | Hit rate limit, will retry |
 
-## CLI Commands
+## CLI Reference
+
+### Global flag
+
+| Flag                | Default                      | Description                |
+|---------------------|------------------------------|----------------------------|
+| `--queue-file PATH` | `~/.claude-queue/tasks.json` | Use a different queue file |
+
+### `add` — Add a task
 
 ```bash
-# Add tasks
-./claude-queue.py add "Task description" \
-  [--session NAME] \
-  [--priority 0-100] \
-  [--max-attempts N] \
-  [--working-dir PATH]  # Specify project directory (default: current dir, max-attempts default: 3)
-
-./claude-queue.py batch tasks.yaml [--dry-run]
-
-# Run worker (requires CLAUDE_SESSION_KEY env var)
-export CLAUDE_SESSION_KEY="your-session-key"
-./claude-queue.py worker [--retry-delay SECONDS] [--save-output]
-
-# Check usage limits
-./claude-queue.py usage              # Show current Claude Plan usage
-./claude-queue.py usage --json       # JSON output
-
-# Monitor
-./claude-queue.py status              # Show queue statistics
-./claude-queue.py list                # List all tasks
-./claude-queue.py list --status queued  # Filter by status
-
-# Manage
-./claude-queue.py remove TASK_ID      # Remove specific task
-./claude-queue.py clear               # Remove completed tasks
+./claude-queue.py add "Task description" [flags]
 ```
+
+| Flag                 | Default           | Description                                                   |
+|----------------------|-------------------|---------------------------------------------------------------|
+| `--session NAME`     | auto-generated    | Human-readable name for the task                              |
+| `--priority N`       | `0`               | Higher number runs first                                      |
+| `--max-attempts N`   | `3`               | Max retry attempts before marking failed                      |
+| `--working-dir PATH` | current directory | Directory Claude runs in                                      |
+| `--timeout N`        | `3600`            | Task execution timeout in seconds; overrides global --timeout |
+
+### `batch` — Load tasks from a file
+
+```bash
+./claude-queue.py batch tasks.yaml [--dry-run]
+```
+
+| Flag        | Description                                    |
+|-------------|------------------------------------------------|
+| `--dry-run` | Preview tasks without adding them to the queue |
+
+### `worker` — Process tasks
+
+```bash
+export CLAUDE_SESSION_KEY="sk-ant-..."
+./claude-queue.py worker [flags]
+```
+
+| Flag                | Default               | Description                                                                    |
+|---------------------|-----------------------|--------------------------------------------------------------------------------|
+| `--session-key KEY` | `$CLAUDE_SESSION_KEY` | Session cookie (alternative to env var)                                        |
+| `--api-url URL`     | auto-detected         | Override the usage API endpoint                                                |
+| `--threshold N`     | `95.0`                | Pause when utilization reaches this %                                          |
+| `--timeout N`       | `3600`                | Default task execution timeout in seconds                                      |
+| `--retry-delay N`   | `60`                  | Base delay (seconds) for exponential backoff on failures                       |
+| `--save-output`     | off                   | Save task outputs to `~/.claude-queue/outputs/`                                |
+| `--stream`          | off                   | Stream Claude output to terminal in real-time (disables output saving)         |
+| `--idle [SECONDS]`  | off                   | Keep worker running when queue is empty, polling every N seconds (default: 30) |
+
+### `usage` — Check Claude usage limits
+
+```bash
+./claude-queue.py usage [flags]
+```
+
+| Flag                | Description                                           |
+|---------------------|-------------------------------------------------------|
+| `--session-key KEY` | Session cookie (alternative to `$CLAUDE_SESSION_KEY`) |
+| `--api-url URL`     | Override the usage API endpoint                       |
+| `--json`            | Output as JSON for scripting                          |
+
+### `status` — Show queue statistics
+
+```bash
+./claude-queue.py status
+```
+
+### `list` — List tasks
+
+```bash
+./claude-queue.py list [--status STATUS]
+```
+
+| Flag              | Description                                                                  |
+|-------------------|------------------------------------------------------------------------------|
+| `--status STATUS` | Filter by status: `queued`, `running`, `completed`, `failed`, `rate_limited` |
+
+### `remove` — Remove a task
+
+```bash
+./claude-queue.py remove TASK_ID
+```
+
+### `clear` — Remove completed tasks
+
+```bash
+./claude-queue.py clear
+```
+
+### `output` — Print saved output for a task
+
+```bash
+./claude-queue.py output TASK_ID
+```
+
+Prints the saved output file for a task. Requires the worker to have been run with `--save-output`.
 
 ## Checking Usage Limits
 
@@ -310,42 +378,38 @@ tmux new -s claude-worker
 # Reattach: tmux attach -s claude-worker
 ```
 
-### Custom Retry Delays
+### Worker tips
 
-For non-rate-limit failures (errors, timeouts), the worker uses exponential backoff:
+**Lower the pause threshold** if you want the worker to stop earlier (e.g. at 80% instead of 95%):
 
 ```bash
-# Faster retries for failures (60s base)
-./claude-queue.py worker --retry-delay 60
-
-# Slower retries for failures (180s base)
-./claude-queue.py worker --retry-delay 180
+./claude-queue.py worker --threshold 80
 ```
 
-**Note:** Rate limits use the `retry-after` value from the API, not this delay.
-
-### Saving Task Outputs
-
-By default, task outputs are captured but not saved. Use `--save-output` to save outputs to files:
+**Keep the worker alive** between batches so you can add tasks without restarting:
 
 ```bash
-# Save outputs to ~/.claude-queue/outputs/
+./claude-queue.py worker --idle 10
+```
+
+**Stream output** to see what Claude is doing in real-time (disables output saving):
+
+```bash
+./claude-queue.py worker --stream
+```
+
+**Save task outputs** for review or debugging:
+
+```bash
 ./claude-queue.py worker --save-output
 ```
 
-**Output files:**
-- Saved to `~/.claude-queue/outputs/{task-id}.txt`
-- Includes task metadata (ID, session, completion time)
-- Only created for successfully completed tasks
-- Each file contains the full Claude Code output for that task
+Output files are saved to `~/.claude-queue/outputs/{task-id}.txt` and include task metadata plus the full Claude output. Only created for successfully completed tasks.
 
-**Example output file:**
-```
-Task: task-1735812345-0
-Session: auth-refactor
-Completed: 2026-01-04T10:30:45.123456
-============================================================
-[Claude Code output here...]
+**Retry delay** controls the base for exponential backoff on non-rate-limit failures (`60s × 2^attempt`). Rate limit retries always use the `retry-after` value from the API instead.
+
+```bash
+./claude-queue.py worker --retry-delay 120
 ```
 
 This is useful for:

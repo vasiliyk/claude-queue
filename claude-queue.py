@@ -38,7 +38,7 @@ import tempfile
 import time
 import uuid
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -80,6 +80,21 @@ class QueueFileError(QueueError):
     """Raised when queue file operations fail"""
 
     pass
+
+
+class SessionExpiredError(QueueError):
+    """Raised when the Claude session key is expired or invalid"""
+
+    pass
+
+
+_SESSION_EXPIRED_MSG = (
+    "Session key expired or invalid.\n"
+    "  1. Go to https://claude.ai in your browser\n"
+    "  2. Open DevTools > Application > Cookies > https://claude.ai\n"
+    "  3. Copy the value of 'sessionKey'\n"
+    "  4. Set CLAUDE_SESSION_KEY=<value>"
+)
 
 
 class TaskStatus(Enum):
@@ -153,7 +168,12 @@ class ClaudeUsageChecker:
         try:
             # Try to get account info which should contain organization details
             response = self.session.get("https://claude.ai/api/organizations", timeout=10)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 401:
+                    raise SessionExpiredError(_SESSION_EXPIRED_MSG) from e
+                raise
 
             orgs = response.json()
 
@@ -186,14 +206,36 @@ class ClaudeUsageChecker:
         try:
             response = self.session.get(self.usage_api_url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            self._validate_usage_response(data)
+            return data
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                raise ValueError(
-                    "Authentication failed. Your session key may be expired.\n"
-                    "Get a new session key from your browser cookies."
-                ) from e
+            if e.response is not None and e.response.status_code == 401:
+                raise SessionExpiredError(_SESSION_EXPIRED_MSG) from e
             raise
+
+    @staticmethod
+    def _validate_usage_response(data: dict) -> None:
+        if not isinstance(data, dict):
+            raise ValueError(
+                "Usage API response has unexpected format (expected a dict). "
+                "The claude.ai API may have changed — please file an issue."
+            )
+        expected = {"five_hour", "seven_day"}
+        if not expected.intersection(data.keys()):
+            raise ValueError(
+                f"Usage API response missing expected keys {expected} "
+                f"(got: {list(data.keys())[:10]}). "
+                "The claude.ai API may have changed — please file an issue."
+            )
+        for section in ("five_hour", "seven_day"):
+            if section in data and data[section] is not None:
+                sub = data[section]
+                if not isinstance(sub, dict) or "utilization" not in sub:
+                    raise ValueError(
+                        f"Usage API response has unexpected format in '{section}'. "
+                        "The claude.ai API may have changed — please file an issue."
+                    )
 
     def parse_usage(self, data: dict) -> dict:
         """
@@ -358,13 +400,15 @@ class Task:
     priority: int = 0  # Higher = higher priority
     depends_on: list[str] | None = None  # List of task IDs this task depends on
     working_dir: str | None = None  # Directory where task should execute
+    timeout: int | None = None  # Per-task timeout in seconds; None = use worker default
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> Task:
-        return cls(**data)
+        valid = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in valid})
 
 
 class TaskQueue:
@@ -579,6 +623,7 @@ class TaskQueue:
         priority: int = 0,
         depends_on: list[str] | None = None,
         working_dir: str | None = None,
+        timeout: int | None = None,
     ) -> Task:
         # Validate inputs
         self._validate_prompt(prompt)
@@ -605,6 +650,7 @@ class TaskQueue:
             priority=priority,
             depends_on=depends_on,
             working_dir=working_dir,
+            timeout=timeout,
         )
 
         tasks.append(task)
@@ -688,6 +734,7 @@ class ClaudeWorker:
         usage_threshold: float = 95.0,
         idle: bool = False,
         idle_interval: int = 30,
+        task_timeout: int = 3600,
     ):
         self.queue = queue
         self.base_retry_delay = base_retry_delay
@@ -698,6 +745,7 @@ class ClaudeWorker:
         self.usage_threshold = usage_threshold
         self.idle = idle
         self.idle_interval = idle_interval
+        self.task_timeout = task_timeout
         self.output_dir = output_dir or (Path.home() / ".claude-queue" / "outputs")
 
         if self.save_output:
@@ -853,14 +901,15 @@ class ClaudeWorker:
                 logger.info(f"Executing in directory: {cwd}")
 
             # Execute Claude
+            effective_timeout = task.timeout if task.timeout is not None else self.task_timeout
             if self.stream_output:
                 # Stream stdout to terminal; capture stderr for rate-limit detection
                 result = subprocess.run(
-                    cmd, stdout=None, stderr=subprocess.PIPE, text=True, timeout=3600, cwd=cwd
+                    cmd, stdout=None, stderr=subprocess.PIPE, text=True, timeout=effective_timeout, cwd=cwd
                 )
                 stdout_out, stderr_out = "", result.stderr
             else:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, cwd=cwd)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout, cwd=cwd)
                 stdout_out, stderr_out = result.stdout, result.stderr
 
             if result.returncode == 0:
@@ -948,7 +997,7 @@ class ClaudeWorker:
 
         try:
             while self.running:
-                # Check usage limits before getting next task
+                # Limits checked here on every iteration, including before the very first task
                 self.check_and_wait_for_limits()
 
                 task = self.queue.get_next_task()
@@ -1016,6 +1065,7 @@ def cmd_add(args, queue: TaskQueue):
         max_attempts=args.max_attempts,
         priority=args.priority,
         working_dir=getattr(args, "working_dir", None),
+        timeout=getattr(args, "timeout", None),
     )
     print(f"✓ Task added: {task.id}")
     print(f"  Session: {task.session_name}")
@@ -1043,8 +1093,9 @@ def cmd_worker(args, queue: TaskQueue):
         save_output=args.save_output,
         stream_output=args.stream,
         usage_threshold=args.threshold,
-        idle=args.idle,
-        idle_interval=args.idle_interval,
+        idle=args.idle is not None,
+        idle_interval=args.idle if args.idle is not None else 30,
+        task_timeout=args.timeout,
     )
     worker.run()
 
@@ -1133,6 +1184,18 @@ def cmd_clear(args, queue: TaskQueue):
     """Clear completed tasks"""
     queue.clear_completed()
     print("✓ Completed tasks cleared")
+
+
+def cmd_output(args, output_dir: Path):
+    """Print saved output for a task"""
+    output_file = output_dir / f"{args.task_id}.txt"
+    if not output_file.exists():
+        print(f"No output file for task {args.task_id}", file=sys.stderr)
+        print(f"  Expected: {output_file}", file=sys.stderr)
+        print("  (Run worker with --save-output to record outputs)", file=sys.stderr)
+        sys.exit(1)
+    with open(output_file) as f:
+        print(f.read(), end="")
 
 
 def load_batch_file(file_path: Path) -> list[dict]:
@@ -1268,6 +1331,7 @@ def cmd_batch(args, queue: TaskQueue):
                     max_attempts=task_data.get("max_attempts", 3),
                     depends_on=depends_on_ids if depends_on_ids else None,
                     working_dir=task_data.get("working_dir"),
+                    timeout=task_data.get("timeout"),
                 )
                 session_display = task.session_name or "auto-generated"
 
@@ -1351,6 +1415,10 @@ def main():
     add_parser.add_argument(
         "--working-dir", help="Working directory for task execution (default: current directory)"
     )
+    add_parser.add_argument(
+        "--timeout", type=int, default=None,
+        help="Task execution timeout in seconds, overrides global --timeout (default: 3600)"
+    )
 
     # Worker command
     worker_parser = subparsers.add_parser(
@@ -1379,15 +1447,17 @@ def main():
         help="Usage percentage at which worker pauses (default: 95.0)",
     )
     worker_parser.add_argument(
-        "--idle",
-        action="store_true",
-        help="Keep worker running when queue is empty, polling for new tasks",
+        "--timeout", type=int, default=3600,
+        help="Default task execution timeout in seconds (default: 3600)"
     )
     worker_parser.add_argument(
-        "--idle-interval",
+        "--idle",
+        nargs="?",
+        const=30,
+        default=None,
         type=int,
-        default=30,
-        help="Seconds between polls when idle (default: 30)",
+        metavar="SECONDS",
+        help="Keep worker running when queue is empty, polling every N seconds (default: 30)",
     )
 
     # Status command
@@ -1405,6 +1475,10 @@ def main():
 
     # Clear command
     subparsers.add_parser("clear", help="Clear completed tasks")
+
+    # Output command
+    output_parser = subparsers.add_parser("output", help="Print saved output for a task")
+    output_parser.add_argument("task_id", help="Task ID")
 
     # Batch command
     batch_parser = subparsers.add_parser("batch", help="Load tasks from YAML/JSON file")
@@ -1428,8 +1502,10 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # Initialize queue (not needed for usage command)
-    queue = TaskQueue(args.queue_file) if args.command != "usage" else None
+    output_dir = Path.home() / ".claude-queue" / "outputs"
+
+    # Initialize queue (not needed for usage/output commands)
+    queue = TaskQueue(args.queue_file) if args.command not in ("usage", "output") else None
 
     # Execute command
     if args.command == "add":
@@ -1444,6 +1520,8 @@ def main():
         cmd_remove(args, queue)
     elif args.command == "clear":
         cmd_clear(args, queue)
+    elif args.command == "output":
+        cmd_output(args, output_dir)
     elif args.command == "batch":
         cmd_batch(args, queue)
     elif args.command == "usage":
@@ -1453,6 +1531,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except SessionExpiredError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
         print(f"Error: {e}", file=sys.stderr)

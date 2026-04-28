@@ -232,8 +232,7 @@ class TestTaskExecution:
         worker = ClaudeWorker(temp_queue)
         task = temp_queue.add_task("Test prompt")
 
-        # Mock timeout
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 3600)):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", worker.task_timeout)):
             success = worker.execute_task(task)
 
         assert success is False
@@ -333,6 +332,85 @@ class TestOutputSaving:
         assert success is True
         updated_task = temp_queue.get_all_tasks()[0]
         assert updated_task.status == TaskStatus.COMPLETED.value
+
+
+class TestTimeoutResolution:
+    """Test that execute_task resolves timeout: per-task overrides global default"""
+
+    def test_uses_global_timeout_when_task_has_none(self, temp_queue):
+        worker = ClaudeWorker(temp_queue, task_timeout=120)
+        task = temp_queue.add_task("Test prompt")  # timeout=None by default
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            worker.execute_task(task)
+
+        assert mock_run.call_args[1]["timeout"] == 120
+
+    def test_per_task_timeout_overrides_global(self, temp_queue):
+        worker = ClaudeWorker(temp_queue, task_timeout=3600)
+        task = temp_queue.add_task("Test prompt", timeout=30)
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            worker.execute_task(task)
+
+        assert mock_run.call_args[1]["timeout"] == 30
+
+    def test_per_task_timeout_overrides_global_stream_mode(self, temp_queue):
+        worker = ClaudeWorker(temp_queue, task_timeout=3600, stream_output=True)
+        task = temp_queue.add_task("Test prompt", timeout=45)
+
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            worker.execute_task(task)
+
+        assert mock_run.call_args[1]["timeout"] == 45
+
+
+class TestCmdOutput:
+    """Test the `output TASK_ID` command handler"""
+
+    def test_prints_saved_output(self, tmp_path, capsys):
+        from claude_queue import cmd_output
+
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+        (output_dir / "task-abc123.txt").write_text("Claude output here\n")
+
+        args = Mock()
+        args.task_id = "task-abc123"
+        cmd_output(args, output_dir)
+
+        assert capsys.readouterr().out == "Claude output here\n"
+
+    def test_missing_file_exits_with_clear_error(self, tmp_path, capsys):
+        from claude_queue import cmd_output
+
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+
+        args = Mock()
+        args.task_id = "task-nonexistent"
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_output(args, output_dir)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "task-nonexistent" in err
+        assert "--save-output" in err
 
 
 class TestWorkerRun:
