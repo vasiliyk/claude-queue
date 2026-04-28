@@ -905,11 +905,18 @@ class ClaudeWorker:
             if self.stream_output:
                 # Stream stdout to terminal; capture stderr for rate-limit detection
                 result = subprocess.run(
-                    cmd, stdout=None, stderr=subprocess.PIPE, text=True, timeout=effective_timeout, cwd=cwd
+                    cmd,
+                    stdout=None,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=effective_timeout,
+                    cwd=cwd,
                 )
                 stdout_out, stderr_out = "", result.stderr
             else:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout, cwd=cwd)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=effective_timeout, cwd=cwd
+                )
                 stdout_out, stderr_out = result.stdout, result.stderr
 
             if result.returncode == 0:
@@ -1416,8 +1423,10 @@ def main():
         "--working-dir", help="Working directory for task execution (default: current directory)"
     )
     add_parser.add_argument(
-        "--timeout", type=int, default=None,
-        help="Task execution timeout in seconds, overrides global --timeout (default: 3600)"
+        "--timeout",
+        type=int,
+        default=None,
+        help="Task execution timeout in seconds, overrides global --timeout (default: 3600)",
     )
 
     # Worker command
@@ -1447,8 +1456,10 @@ def main():
         help="Usage percentage at which worker pauses (default: 95.0)",
     )
     worker_parser.add_argument(
-        "--timeout", type=int, default=3600,
-        help="Default task execution timeout in seconds (default: 3600)"
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Default task execution timeout in seconds (default: 3600)",
     )
     worker_parser.add_argument(
         "--idle",

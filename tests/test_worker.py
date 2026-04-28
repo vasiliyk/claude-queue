@@ -232,7 +232,9 @@ class TestTaskExecution:
         worker = ClaudeWorker(temp_queue)
         task = temp_queue.add_task("Test prompt")
 
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", worker.task_timeout)):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("claude", worker.task_timeout)
+        ):
             success = worker.execute_task(task)
 
         assert success is False

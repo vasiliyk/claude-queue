@@ -15,16 +15,24 @@ def mocked_checker(mocker):
     The patch stays active for the full test via mocker (pytest-mock),
     so calls to is_limit_exceeded / fetch_usage inside the test body work.
     """
+
     def _make(five_hour_util: float = 50.0, seven_day_util: float = 50.0):
         mock_response = Mock()
         mock_response.json.return_value = {
-            "five_hour": {"utilization": five_hour_util, "resets_at": "2026-01-04T15:30:00.000000Z"},
-            "seven_day": {"utilization": seven_day_util, "resets_at": "2026-01-08T10:00:00.000000Z"},
+            "five_hour": {
+                "utilization": five_hour_util,
+                "resets_at": "2026-01-04T15:30:00.000000Z",
+            },
+            "seven_day": {
+                "utilization": seven_day_util,
+                "resets_at": "2026-01-08T10:00:00.000000Z",
+            },
         }
         mock_session = Mock()
         mock_session.get.return_value = mock_response
         mocker.patch("requests.Session", return_value=mock_session)
         return ClaudeUsageChecker(session_key="test-key", org_id="test-org-id")
+
     return _make
 
 
@@ -272,10 +280,12 @@ class TestValidateUsageResponse:
 
     def test_rejects_malformed_section(self):
         with pytest.raises(ValueError, match="unexpected format in 'five_hour'"):
-            ClaudeUsageChecker._validate_usage_response({
-                "five_hour": {"no_utilization_key": 50.0},
-                "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
-            })
+            ClaudeUsageChecker._validate_usage_response(
+                {
+                    "five_hour": {"no_utilization_key": 50.0},
+                    "seven_day": {"utilization": 60.0, "resets_at": "2026-01-08T10:00:00.000000Z"},
+                }
+            )
 
     def test_accepts_valid_response(self, mock_usage_data):
         ClaudeUsageChecker._validate_usage_response(mock_usage_data)  # must not raise
